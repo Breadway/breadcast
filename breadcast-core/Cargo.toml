@@ -1,0 +1,63 @@
+[package]
+name = "breadcast-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared, GTK-agnostic logic for breadcast: Chromecast + DLNA discovery/control, capture/encode/serve pipeline"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+mdns-sd = "0.20"
+rust_cast = { version = "0.21", features = ["thread_safe"] }
+ashpd = { version = "0.13", features = ["screencast"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+tiny_http = "0.12"
+rupnp = "3.0.0"
+futures-util = "0.3.33"
+breadcast-caststream-sys = { path = "../breadcast-caststream-sys" }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "discover"
+path = "src/examples/discover.rs"
+
+[[example]]
+name = "cast_test"
+path = "src/examples/cast_test.rs"
+
+[[example]]
+name = "capture_test"
+path = "src/examples/capture_test.rs"
+
+[[example]]
+name = "video_test"
+path = "src/examples/video_test.rs"
+
+[[example]]
+name = "mirror_test"
+path = "src/examples/mirror_test.rs"
+
+[[example]]
+name = "apple_hls_test"
+path = "src/examples/apple_hls_test.rs"
+
+[[example]]
+name = "dlna_discover"
+path = "src/examples/dlna_discover.rs"
+
+[[example]]
+name = "dlna_mirror_test"
+path = "src/examples/dlna_mirror_test.rs"
+
+[[example]]
+name = "cast_stream_test"
+path = "src/examples/cast_stream_test.rs"

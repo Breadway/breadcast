@@ -1,0 +1,19 @@
+[Unit]
+Description=breadcast screen-mirroring daemon
+Documentation=https://git.breadway.dev/breadway/breadcast
+# Start after the graphical session is ready so WAYLAND_DISPLAY is set
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/breadcastd
+Restart=on-failure
+RestartSec=2
+
+# Forward stdout/stderr to the journal so `journalctl --user -u breadcastd` works
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

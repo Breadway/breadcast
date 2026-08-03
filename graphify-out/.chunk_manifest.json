@@ -1,0 +1,15 @@
+{
+  "files": [
+    "/home/breadway/Projects/breadcast/.forgejo/workflows/beta-release.yml",
+    "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+    "/home/breadway/Projects/breadcast/.forgejo/workflows/release.yml",
+    "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+    "/home/breadway/Projects/breadcast/EVENTS.md",
+    "/home/breadway/Projects/breadcast/README.md",
+    "/home/breadway/Projects/breadcast/breadcast-caststream-sys/vendor/openscreen/PATCHES.md",
+    "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/PATCHES.md",
+    "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/README.md"
+  ],
+  "chunk_num": 1,
+  "total_chunks": 1
+}
