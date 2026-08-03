@@ -1,0 +1,28 @@
+[workspace]
+members = ["breadcast-core", "breadcastd", "breadcast", "breadcast-caststream-sys"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Breadway <plasticbread849@gmail.com>"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Adds CastDevice::send_message() -- a point-to-point send on an arbitrary
+# namespace, needed for the Cast Streaming OFFER/ANSWER exchange. See
+# vendor/rust_cast-0.21.0/PATCHES.md.
+[patch.crates-io]
+rust_cast = { path = "vendor/rust_cast-0.21.0" }

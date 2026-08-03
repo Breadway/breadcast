@@ -1,0 +1,6 @@
+{
+  "_comment": "BOS-native keybind snippet (hyprland.lua + JSON config, not classic hyprland.conf — see CONTRIBUTING.md/README for context). There is no per-app self-registration mechanism today: merge this entry's contents into the 'bindings' array of BOS's own skel binds.json by hand, the same way breadclip's Super+V entry was added. Not auto-installed by bakery.",
+  "bindings": [
+    { "action": "exec", "command": "breadcast", "key": "C", "label": "Cast your screen (breadcast)", "category": "apps", "demo_cmd": "breadcast" }
+  ]
+}
