@@ -1,0 +1,941 @@
+{
+  "nodes": [
+    {
+      "id": "dev-release-workflow",
+      "label": "Dev Release Workflow",
+      "type": "process",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+      "source_location": "line 1-79",
+      "definition": "Forgejo CI workflow that auto-publishes dev-track builds on every push to the dev branch"
+    },
+    {
+      "id": "beta-release-workflow",
+      "label": "Beta Release Workflow",
+      "type": "process",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/beta-release.yml",
+      "source_location": "line 1-79",
+      "definition": "Forgejo CI workflow that auto-publishes beta-track builds on every push to the beta branch (frozen stabilization)"
+    },
+    {
+      "id": "stable-release-workflow",
+      "label": "Stable Release Workflow",
+      "type": "process",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/release.yml",
+      "source_location": "line 1-58",
+      "definition": "Forgejo CI workflow triggered by v* tag push; cuts stable releases and uploads to GitHub"
+    },
+    {
+      "id": "main-branch",
+      "label": "Main Branch",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 11-12",
+      "definition": "Release branch, always tag-ready. Only moves forward via beta merge"
+    },
+    {
+      "id": "dev-branch",
+      "label": "Dev Branch",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 13-16",
+      "definition": "Integration branch where all day-to-day work lands first. Auto-publishes dev builds on push"
+    },
+    {
+      "id": "beta-branch",
+      "label": "Beta Branch",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 17-20",
+      "definition": "Frozen stabilization branch cut from dev periodically. Auto-publishes beta builds; only fix branches merged after freeze"
+    },
+    {
+      "id": "dev-track",
+      "label": "Dev Track",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 52-64",
+      "definition": "Bleeding edge release track; distributed from dev branch via dl.breadway.dev/dev"
+    },
+    {
+      "id": "beta-track",
+      "label": "Beta Track",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 52-64",
+      "definition": "Current stabilization freeze track; distributed from beta branch via dl.breadway.dev/beta"
+    },
+    {
+      "id": "stable-track",
+      "label": "Stable Track",
+      "type": "config",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 52-64",
+      "definition": "Last tagged release track; distributed from main branch via dl.breadway.dev"
+    },
+    {
+      "id": "release-cycle",
+      "label": "Release Cycle",
+      "type": "process",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 34-50",
+      "definition": "Three-phase release workflow: 1 week dev stability, then beta cut + 1 month stabilization, then merge to main + tag for stable release"
+    },
+    {
+      "id": "bakery-package-manager",
+      "label": "Bakery Package Manager",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 54-58",
+      "definition": "Bread ecosystem package manager; users manage install tracks via 'bakery track set' / 'bakery update --all'"
+    },
+    {
+      "id": "dl-breadway-dev",
+      "label": "dl.breadway.dev",
+      "type": "tool",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+      "source_location": "line 50,60",
+      "definition": "Breadway package distribution server hosting dev/beta/stable builds and signed index.json"
+    },
+    {
+      "id": "breadcastd-daemon",
+      "label": "breadcastd Daemon",
+      "type": "component",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 6-8",
+      "definition": "Background daemon that discovers Cast devices on LAN, owns screen-capture/encode/serve pipeline and live Cast V2 session"
+    },
+    {
+      "id": "breadcast-ui",
+      "label": "breadcast UI",
+      "type": "component",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 9-10",
+      "definition": "GTK4 Layer Shell popup for picking a device and starting/stopping a cast"
+    },
+    {
+      "id": "breadcast-core",
+      "label": "breadcast-core Library",
+      "type": "library",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 46",
+      "definition": "Core Rust library providing device discovery example"
+    },
+    {
+      "id": "cast-protocol",
+      "label": "Cast Protocol",
+      "type": "protocol",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 19",
+      "definition": "Cast/Chromecast discovery protocol via mDNS; device_id is protocol-specific"
+    },
+    {
+      "id": "dlna-protocol",
+      "label": "DLNA Protocol",
+      "type": "protocol",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 19",
+      "definition": "DLNA/UPnP media renderer discovery via SSDP; device_id is protocol-specific (description URL)"
+    },
+    {
+      "id": "castv2-protocol",
+      "label": "CASTV2 Protocol",
+      "type": "protocol",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/README.md",
+      "source_location": "line 10,29",
+      "definition": "Cast V2 control protocol implementation; uses TLS control channel and arbitrary namespace messaging"
+    },
+    {
+      "id": "cast-streaming",
+      "label": "Cast Streaming",
+      "type": "protocol",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/breadcast-caststream-sys/vendor/openscreen/PATCHES.md",
+      "source_location": "line 5-11",
+      "definition": "Cast Streaming sender protocol: RTP/RTCP send + OFFER/ANSWER negotiation + AES frame encryption"
+    },
+    {
+      "id": "device-discovered-event",
+      "label": "Device Discovered Event",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 17-19",
+      "definition": "bread.cast.device_found event fired when Chromecast/Google TV or DLNA renderer discovered/re-resolved on LAN; fires on every re-resolution"
+    },
+    {
+      "id": "mirroring-started-event",
+      "label": "Mirroring Started Event",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 20",
+      "definition": "bread.cast.mirroring_started event fired when mirroring session successfully starts via command, IPC, or popup"
+    },
+    {
+      "id": "mirroring-stopped-event",
+      "label": "Mirroring Stopped Event",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 21",
+      "definition": "bread.cast.mirroring_stopped event fired when session ends (explicit stop or unprompted receiver disconnect)"
+    },
+    {
+      "id": "mirroring-failed-event",
+      "label": "Mirroring Failed Event",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 22",
+      "definition": "bread.cast.mirroring_failed event fired when start attempt fails before session established"
+    },
+    {
+      "id": "cast-start-command",
+      "label": "Cast Start Command",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 28",
+      "definition": "bread.command.cast.start command; fire-and-forget starts mirroring to given device (outcome via mirroring_started/failed events)"
+    },
+    {
+      "id": "cast-stop-command",
+      "label": "Cast Stop Command",
+      "type": "event",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 29",
+      "definition": "bread.command.cast.stop command; stops active mirroring session if any"
+    },
+    {
+      "id": "breadd-integration",
+      "label": "Breadd Integration",
+      "type": "component",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 1-8",
+      "definition": "breadcastd publishes into shared bread automation fabric (bread.cast.*/bread.command.cast.*) when breadd present; fails gracefully without it"
+    },
+    {
+      "id": "bread-automation-fabric",
+      "label": "Bread Automation Fabric",
+      "type": "system",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 4",
+      "definition": "Shared bread ecosystem event/command bus; optional for breadcast, provides device discovery events and command reception"
+    },
+    {
+      "id": "bread-client-transport",
+      "label": "bread_client Transport",
+      "type": "library",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 10-13",
+      "definition": "bread-utils module (feature flag bread-client) handling IPC to bread automation fabric; linked directly by breadcastd"
+    },
+    {
+      "id": "screen-mirroring-pipeline",
+      "label": "Screen Mirroring Pipeline",
+      "type": "process",
+      "confidence": 0.85,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 8,15-18",
+      "definition": "Portal-based screen capture → GPU-accelerated encode → HLS → local HTTP server pipeline (not fully built in current version)"
+    },
+    {
+      "id": "gstreamer",
+      "label": "GStreamer",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 27-28",
+      "definition": "Media framework for encoding pipeline; requires gst-plugin-pipewire, gst-plugins-bad (VA-API), gst-plugin-hlssink3"
+    },
+    {
+      "id": "hyprland",
+      "label": "Hyprland",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 29-30",
+      "definition": "Wayland compositor target; requires Layer Shell + xdg-desktop-portal ScreenCast interface"
+    },
+    {
+      "id": "wayland",
+      "label": "Wayland",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 29-30",
+      "definition": "Display server protocol required for breadcast"
+    },
+    {
+      "id": "xdg-desktop-portal",
+      "label": "XDG Desktop Portal",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 30",
+      "definition": "XDG Desktop Portal with ScreenCast interface for secure screen capture"
+    },
+    {
+      "id": "gtk4",
+      "label": "GTK4",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 26",
+      "definition": "GTK 4.12+ UI toolkit for breadcast popup"
+    },
+    {
+      "id": "gtk4-layer-shell",
+      "label": "gtk4-layer-shell",
+      "type": "library",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 26",
+      "definition": "Layer Shell protocol binding for GTK4; required for breadcast popup"
+    },
+    {
+      "id": "systemd-user-service",
+      "label": "Systemd User Service",
+      "type": "config",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 59-67",
+      "definition": "breadcastd.service unit file in contrib/ for persistent daemon management"
+    },
+    {
+      "id": "hyprland-keybind",
+      "label": "Hyprland Keybind",
+      "type": "config",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 69-84",
+      "definition": "Super+C keybind launches breadcast popup; stock conf vs BOS Lua+JSON config differences"
+    },
+    {
+      "id": "bread-theme",
+      "label": "Bread Theme",
+      "type": "tool",
+      "confidence": 0.85,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 94-98",
+      "definition": "Shared bread ecosystem color palette; breadcast UI will inherit theme once built"
+    },
+    {
+      "id": "openscreen-vendor",
+      "label": "OpenScreen Vendor",
+      "type": "library",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/breadcast-caststream-sys/vendor/openscreen/PATCHES.md",
+      "source_location": "line 1-14",
+      "definition": "Chromium OpenScreen pruned subset (BSD-3-Clause); Cast Streaming sender data path (RTP/RTCP, OFFER/ANSWER, AES encryption)"
+    },
+    {
+      "id": "breadcast-caststream-sys",
+      "label": "breadcast-caststream-sys",
+      "type": "library",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/breadcast-caststream-sys/vendor/openscreen/PATCHES.md",
+      "source_location": "line 13-14",
+      "definition": "Rust FFI wrapper for Cast Streaming sender path; uses cc crate to compile vendored OpenScreen C++"
+    },
+    {
+      "id": "rust-cast-vendor",
+      "label": "rust_cast Vendor",
+      "type": "library",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/PATCHES.md",
+      "source_location": "line 1-6",
+      "definition": "azasypkin/rust-cast 0.21.0 (MIT licensed) vendored via [patch.crates-io]; patched with generic point-to-point CASTV2 namespace send"
+    },
+    {
+      "id": "cast-device-send-message",
+      "label": "CastDevice::send_message",
+      "type": "concept",
+      "confidence": 0.95,
+      "source_file": "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/PATCHES.md",
+      "source_location": "line 25-29",
+      "definition": "Custom method patch added to rust_cast; generic point-to-point send on arbitrary CASTV2 namespace with caller-supplied destination"
+    },
+    {
+      "id": "webrtc-namespace",
+      "label": "WebRTC Namespace",
+      "type": "concept",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/vendor/rust_cast-0.21.0/PATCHES.md",
+      "source_location": "line 13,19",
+      "definition": "urn:x-cast:com.google.cast.webrtc namespace for OFFER/ANSWER exchange with Cast receiver app"
+    },
+    {
+      "id": "mdns-discovery",
+      "label": "mDNS Discovery",
+      "type": "protocol",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/README.md",
+      "source_location": "line 14",
+      "definition": "Multicast DNS discovery for Chromecast/Google TV devices on LAN"
+    },
+    {
+      "id": "ssdp-discovery",
+      "label": "SSDP Discovery",
+      "type": "protocol",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 19",
+      "definition": "Simple Service Discovery Protocol for finding DLNA/UPnP media renderers on LAN"
+    },
+    {
+      "id": "daemon-actor-pattern",
+      "label": "Daemon Actor Pattern",
+      "type": "pattern",
+      "confidence": 0.85,
+      "source_file": "/home/breadway/Projects/breadcast/EVENTS.md",
+      "source_location": "line 33-34",
+      "definition": "breadcastd uses actor pattern with single 'active session' notion across all control surfaces (command, IPC, popup)"
+    },
+    {
+      "id": "minisign",
+      "label": "Minisign",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/beta-release.yml",
+      "source_location": "line 66,70",
+      "definition": "Cryptographic signature tool for signing bakery index.json; secret stored as CI variable"
+    },
+    {
+      "id": "semantic-versioning",
+      "label": "Semantic Versioning",
+      "type": "concept",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+      "source_location": "line 34-45",
+      "definition": "Version scheme: X.Y.Z for stable, X.Y.Z-dev.<timestamp>+<sha> for dev, X.Y.Z-beta.<timestamp>+<sha> for beta; auto-computed from latest tag"
+    },
+    {
+      "id": "version-sorting",
+      "label": "Version Sorting",
+      "type": "concept",
+      "confidence": 0.85,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+      "source_location": "line 29-45",
+      "definition": "Dev/beta versions always sort newer than stable via timestamp suffix, ensuring bakery accepts them over existing installs"
+    },
+    {
+      "id": "self-hosted-runner",
+      "label": "Self-Hosted Runner",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/dev-release.yml",
+      "source_location": "line 13",
+      "definition": "Forgejo CI uses self-hosted hestia runner for all builds (not cloud CI)"
+    },
+    {
+      "id": "github-release",
+      "label": "GitHub Release",
+      "type": "tool",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/.forgejo/workflows/release.yml",
+      "source_location": "line 44-58",
+      "definition": "GitHub mirror destination for stable releases; breadcast binaries uploaded via gh CLI with GH_RELEASE_TOKEN"
+    },
+    {
+      "id": "bread-ecosystem",
+      "label": "Bread Ecosystem",
+      "type": "system",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 6-7",
+      "definition": "Multi-project ecosystem with shared release channel policy and automation; breadcast follows same workflow as other products"
+    },
+    {
+      "id": "feature-branch",
+      "label": "Feature Branch",
+      "type": "config",
+      "confidence": 0.90,
+      "source_file": "/home/breadway/Projects/breadcast/CONTRIBUTING.md",
+      "source_location": "line 22-27",
+      "definition": "Short-lived branch (feature/<name> or fix/<issue>) branched from dev; merged back to dev via PR when ready"
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "dev-release-workflow",
+      "target_id": "dev-branch",
+      "relationship": "triggers",
+      "confidence": 0.95,
+      "justification": "Workflow explicitly triggers 'on: push: branches: [dev]'"
+    },
+    {
+      "source_id": "dev-release-workflow",
+      "target_id": "dev-track",
+      "relationship": "produces",
+      "confidence": 0.95,
+      "justification": "Workflow publishes dev-track builds to dl.breadway.dev/dev"
+    },
+    {
+      "source_id": "beta-release-workflow",
+      "target_id": "beta-branch",
+      "relationship": "triggers",
+      "confidence": 0.95,
+      "justification": "Workflow explicitly triggers 'on: push: branches: [beta]'"
+    },
+    {
+      "source_id": "beta-release-workflow",
+      "target_id": "beta-track",
+      "relationship": "produces",
+      "confidence": 0.95,
+      "justification": "Workflow publishes beta-track builds to dl.breadway.dev/beta"
+    },
+    {
+      "source_id": "stable-release-workflow",
+      "target_id": "main-branch",
+      "relationship": "references",
+      "confidence": 0.90,
+      "justification": "Workflow triggered by v* tag pushes; releases are merged to main branch"
+    },
+    {
+      "source_id": "stable-release-workflow",
+      "target_id": "stable-track",
+      "relationship": "produces",
+      "confidence": 0.95,
+      "justification": "Workflow publishes stable-track builds to dl.breadway.dev"
+    },
+    {
+      "source_id": "stable-release-workflow",
+      "target_id": "github-release",
+      "relationship": "connects",
+      "confidence": 0.95,
+      "justification": "Workflow uploads binaries to GitHub Release via gh CLI after stable build"
+    },
+    {
+      "source_id": "release-cycle",
+      "target_id": "dev-branch",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "Cycle step 1: work accumulates on dev via feature/fix branches"
+    },
+    {
+      "source_id": "release-cycle",
+      "target_id": "beta-branch",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "Cycle step 2: beta is cut from dev after ~1 week stability"
+    },
+    {
+      "source_id": "release-cycle",
+      "target_id": "main-branch",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "Cycle step 4: beta merged to main after ~1 month stability and tagged"
+    },
+    {
+      "source_id": "beta-branch",
+      "target_id": "main-branch",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Beta is frozen stabilization branch that merges to main when ready"
+    },
+    {
+      "source_id": "dev-branch",
+      "target_id": "beta-branch",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Beta is cut from dev; fixes can be forward-merged from beta to dev"
+    },
+    {
+      "source_id": "bakery-package-manager",
+      "target_id": "stable-track",
+      "relationship": "manages",
+      "confidence": 0.85,
+      "justification": "Users select tracks and update via bakery commands"
+    },
+    {
+      "source_id": "bakery-package-manager",
+      "target_id": "dev-track",
+      "relationship": "manages",
+      "confidence": 0.85,
+      "justification": "Users select tracks and update via bakery commands"
+    },
+    {
+      "source_id": "bakery-package-manager",
+      "target_id": "beta-track",
+      "relationship": "manages",
+      "confidence": 0.85,
+      "justification": "Users select tracks and update via bakery commands"
+    },
+    {
+      "source_id": "dl-breadway-dev",
+      "target_id": "dev-track",
+      "relationship": "contains",
+      "confidence": 0.95,
+      "justification": "Dev builds distributed via dl.breadway.dev/dev/"
+    },
+    {
+      "source_id": "dl-breadway-dev",
+      "target_id": "beta-track",
+      "relationship": "contains",
+      "confidence": 0.95,
+      "justification": "Beta builds distributed via dl.breadway.dev/beta/"
+    },
+    {
+      "source_id": "dl-breadway-dev",
+      "target_id": "stable-track",
+      "relationship": "contains",
+      "confidence": 0.95,
+      "justification": "Stable builds distributed via dl.breadway.dev/"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "breadcast-core",
+      "relationship": "depends_on",
+      "confidence": 0.85,
+      "justification": "breadcastd owns the daemon logic built on breadcast-core functionality"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "screen-mirroring-pipeline",
+      "relationship": "contains",
+      "confidence": 0.95,
+      "justification": "breadcastd owns screen-capture/encode/serve pipeline"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "breadd-integration",
+      "relationship": "implements",
+      "confidence": 0.95,
+      "justification": "breadcastd publishes events and listens for commands via breadd integration"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "daemon-actor-pattern",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "breadcastd's daemon actor has exactly one active session notion"
+    },
+    {
+      "source_id": "breadcast-ui",
+      "target_id": "gtk4",
+      "relationship": "depends_on",
+      "confidence": 0.90,
+      "justification": "breadcast is GTK4 Layer Shell popup"
+    },
+    {
+      "source_id": "breadcast-ui",
+      "target_id": "gtk4-layer-shell",
+      "relationship": "depends_on",
+      "confidence": 0.90,
+      "justification": "breadcast uses Layer Shell protocol for window positioning"
+    },
+    {
+      "source_id": "breadcast-ui",
+      "target_id": "bread-theme",
+      "relationship": "uses",
+      "confidence": 0.85,
+      "justification": "breadcast will inherit color palette from bread-theme once UI built"
+    },
+    {
+      "source_id": "cast-protocol",
+      "target_id": "mdns-discovery",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "Cast devices discovered via mDNS"
+    },
+    {
+      "source_id": "dlna-protocol",
+      "target_id": "ssdp-discovery",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "DLNA renderers discovered via SSDP"
+    },
+    {
+      "source_id": "device-discovered-event",
+      "target_id": "cast-protocol",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Event fires for both Cast and DLNA devices; protocol field distinguishes them"
+    },
+    {
+      "source_id": "device-discovered-event",
+      "target_id": "dlna-protocol",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Event fires for both Cast and DLNA devices; protocol field distinguishes them"
+    },
+    {
+      "source_id": "mirroring-started-event",
+      "target_id": "cast-start-command",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Event fires in response to cast.start command (among other triggers)"
+    },
+    {
+      "source_id": "mirroring-stopped-event",
+      "target_id": "cast-stop-command",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Event fires in response to cast.stop command (among other stop triggers)"
+    },
+    {
+      "source_id": "mirroring-failed-event",
+      "target_id": "cast-start-command",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Event fires when cast.start attempt fails"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "bread-automation-fabric",
+      "relationship": "connects",
+      "confidence": 0.95,
+      "justification": "breadcastd publishes events into shared bread automation fabric"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "bread-client-transport",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "breadcastd links bread_client module directly for command subscription and emit"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "device-discovered-event",
+      "relationship": "emits",
+      "confidence": 0.95,
+      "justification": "breadcastd publishes device_found events to bread fabric"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "mirroring-started-event",
+      "relationship": "emits",
+      "confidence": 0.90,
+      "justification": "breadcastd publishes mirroring_started events to bread fabric"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "mirroring-stopped-event",
+      "relationship": "emits",
+      "confidence": 0.90,
+      "justification": "breadcastd publishes mirroring_stopped events to bread fabric"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "mirroring-failed-event",
+      "relationship": "emits",
+      "confidence": 0.90,
+      "justification": "breadcastd publishes mirroring_failed events to bread fabric"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "cast-start-command",
+      "relationship": "receives",
+      "confidence": 0.95,
+      "justification": "breadcastd listens for bread.command.cast.start commands"
+    },
+    {
+      "source_id": "breadd-integration",
+      "target_id": "cast-stop-command",
+      "relationship": "receives",
+      "confidence": 0.95,
+      "justification": "breadcastd listens for bread.command.cast.stop commands"
+    },
+    {
+      "source_id": "screen-mirroring-pipeline",
+      "target_id": "gstreamer",
+      "relationship": "depends_on",
+      "confidence": 0.90,
+      "justification": "Encode pipeline uses GStreamer + plugins (pipewire, VA-API, hlssink3)"
+    },
+    {
+      "source_id": "screen-mirroring-pipeline",
+      "target_id": "xdg-desktop-portal",
+      "relationship": "depends_on",
+      "confidence": 0.90,
+      "justification": "Screen capture via XDG Desktop Portal ScreenCast interface"
+    },
+    {
+      "source_id": "breadcast-ui",
+      "target_id": "hyprland",
+      "relationship": "requires",
+      "confidence": 0.90,
+      "justification": "breadcast popup requires Hyprland (or Layer Shell compositor)"
+    },
+    {
+      "source_id": "hyprland",
+      "target_id": "wayland",
+      "relationship": "uses",
+      "confidence": 0.95,
+      "justification": "Hyprland is Wayland compositor"
+    },
+    {
+      "source_id": "hyprland-keybind",
+      "target_id": "breadcast-ui",
+      "relationship": "triggers",
+      "confidence": 0.95,
+      "justification": "Super+C keybind launches breadcast popup"
+    },
+    {
+      "source_id": "systemd-user-service",
+      "target_id": "breadcastd-daemon",
+      "relationship": "manages",
+      "confidence": 0.95,
+      "justification": "breadcastd.service enables/manages daemon via systemd --user"
+    },
+    {
+      "source_id": "breadcast-caststream-sys",
+      "target_id": "openscreen-vendor",
+      "relationship": "wraps",
+      "confidence": 0.95,
+      "justification": "breadcast-caststream-sys is Rust FFI wrapper for vendored OpenScreen C++"
+    },
+    {
+      "source_id": "breadcast-caststream-sys",
+      "target_id": "cast-streaming",
+      "relationship": "implements",
+      "confidence": 0.95,
+      "justification": "breadcast-caststream-sys realizes Cast Streaming sender protocol"
+    },
+    {
+      "source_id": "openscreen-vendor",
+      "target_id": "cast-streaming",
+      "relationship": "implements",
+      "confidence": 0.95,
+      "justification": "OpenScreen vendor code implements RTP/RTCP send + OFFER/ANSWER + AES encryption"
+    },
+    {
+      "source_id": "rust-cast-vendor",
+      "target_id": "castv2-protocol",
+      "relationship": "implements",
+      "confidence": 0.95,
+      "justification": "rust_cast implements CASTV2 protocol"
+    },
+    {
+      "source_id": "cast-device-send-message",
+      "target_id": "rust-cast-vendor",
+      "relationship": "extends",
+      "confidence": 0.95,
+      "justification": "Custom patch adds send_message method to rust_cast's CastDevice"
+    },
+    {
+      "source_id": "cast-device-send-message",
+      "target_id": "webrtc-namespace",
+      "relationship": "enables",
+      "confidence": 0.95,
+      "justification": "send_message allows OFFER/ANSWER exchange on urn:x-cast:com.google.cast.webrtc namespace"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "rust-cast-vendor",
+      "relationship": "depends_on",
+      "confidence": 0.90,
+      "justification": "breadcastd uses rust_cast for CASTV2 control channel"
+    },
+    {
+      "source_id": "breadcastd-daemon",
+      "target_id": "cast-device-send-message",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "breadcastd uses patched send_message for Cast Streaming OFFER/ANSWER exchange"
+    },
+    {
+      "source_id": "semantic-versioning",
+      "target_id": "version-sorting",
+      "relationship": "relates_to",
+      "confidence": 0.90,
+      "justification": "Semantic version scheme ensures dev/beta builds sort newer than stable"
+    },
+    {
+      "source_id": "dev-release-workflow",
+      "target_id": "semantic-versioning",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "Dev workflow computes X.Y.Z-dev.<timestamp>+<sha> versions"
+    },
+    {
+      "source_id": "beta-release-workflow",
+      "target_id": "semantic-versioning",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "Beta workflow computes X.Y.Z-beta.<timestamp>+<sha> versions"
+    },
+    {
+      "source_id": "dev-release-workflow",
+      "target_id": "minisign",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "Dev workflow signs index.json with BAKERY_MINISIGN_SEC_KEY"
+    },
+    {
+      "source_id": "beta-release-workflow",
+      "target_id": "minisign",
+      "relationship": "uses",
+      "confidence": 0.90,
+      "justification": "Beta workflow signs index.json with BAKERY_MINISIGN_SEC_KEY"
+    },
+    {
+      "source_id": "self-hosted-runner",
+      "target_id": "dev-release-workflow",
+      "relationship": "runs",
+      "confidence": 0.95,
+      "justification": "Dev-release workflow runs on [self-hosted, hestia] runner"
+    },
+    {
+      "source_id": "self-hosted-runner",
+      "target_id": "beta-release-workflow",
+      "relationship": "runs",
+      "confidence": 0.95,
+      "justification": "Beta-release workflow runs on [self-hosted, hestia] runner"
+    },
+    {
+      "source_id": "self-hosted-runner",
+      "target_id": "stable-release-workflow",
+      "relationship": "runs",
+      "confidence": 0.95,
+      "justification": "Stable-release workflow runs on [self-hosted, hestia] runner"
+    },
+    {
+      "source_id": "feature-branch",
+      "target_id": "dev-branch",
+      "relationship": "relates_to",
+      "confidence": 0.95,
+      "justification": "Feature branches branch from dev and merge back via PR"
+    },
+    {
+      "source_id": "bread-ecosystem",
+      "target_id": "release-cycle",
+      "relationship": "defines",
+      "confidence": 0.90,
+      "justification": "Bread ecosystem defines three-track release policy that breadcast follows"
+    },
+    {
+      "source_id": "bread-ecosystem",
+      "target_id": "bakery-package-manager",
+      "relationship": "includes",
+      "confidence": 0.90,
+      "justification": "Bakery is bread ecosystem distribution tool"
+    }
+  ],
+  "hyperedges": [],
+  "input_tokens": 0,
+  "output_tokens": 0
+}
