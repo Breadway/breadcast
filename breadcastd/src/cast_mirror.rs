@@ -24,11 +24,43 @@ use rust_cast::channels::receiver::CastDeviceApp;
 
 use crate::daemon::DaemonCommand;
 
+/// The encoder's starting target bitrate, in kbps -- must match the
+/// `bitrate=` property `build_video_pipeline_for_streaming` builds the
+/// `vah264enc` with, since [`bitrate_control_step`] treats it as the value
+/// already in effect at t=0.
+const INITIAL_BITRATE_KBPS: u32 = 4000;
+/// Never encode below this. 720p30 below roughly 1 Mbps is a wall of
+/// blocking artifacts -- if the link genuinely can't carry that, dropping
+/// frames is a better failure mode than shipping unwatchable video.
+const MIN_BITRATE_KBPS: u32 = 1000;
+/// Never encode above this, regardless of how much headroom the estimator
+/// reports. Matches `VideoParams::default().max_bitrate_bps`, i.e. what the
+/// OFFER told the receiver to expect.
+const MAX_BITRATE_KBPS: u32 = 8000;
+
 pub struct CastMirrorSession {
     pipeline: gst::Pipeline,
     session: CastSession,
     capture: Option<CaptureSession>,
-    threads: Vec<std::thread::JoinHandle<()>>,
+    /// The FFI Cast Streaming session. Held here (rather than only inside
+    /// the pump-thread closures, as an earlier version did) so its
+    /// `Drop` -- which calls `breadcast_caststream_sender_destroy` and
+    /// blocks until openscreen's threads stop -- happens at an explicit,
+    /// deterministic point in [`Self::stop`], instead of "whichever
+    /// detached pump thread happened to drop the last `Arc`."
+    sender: Option<Arc<CastStreamSender>>,
+    /// Forwards inbound CASTV2 `urn:x-cast:com.google.cast.webrtc` messages
+    /// (the ANSWER) into the FFI session. Ends when [`CastSession::stop`]
+    /// closes the raw-message channel. Holds an `Arc<CastStreamSender>`.
+    message_pump: Option<std::thread::JoinHandle<()>>,
+    /// Forwards outbound FFI events (the OFFER) onto the CASTV2 connection.
+    /// Ends only once the `CastStreamSender` itself is dropped (that is what
+    /// closes the event channel), so it must be joined *after* `sender` is
+    /// dropped, not before -- joining it first would deadlock.
+    event_pump: Option<std::thread::JoinHandle<()>>,
+    /// Pulls encoded frames from the appsink into the FFI session. Ends on
+    /// pipeline EOS/flush. Holds an `Arc<CastStreamSender>`.
+    frame_pump: Option<std::thread::JoinHandle<()>>,
 }
 
 impl CastMirrorSession {
@@ -78,9 +110,7 @@ impl CastMirrorSession {
                 .context("failed to start the Cast Streaming session")?;
         let sender = Arc::new(sender);
 
-        let mut threads = Vec::new();
-
-        threads.push({
+        let message_pump = {
             let sender = sender.clone();
             std::thread::spawn(move || {
                 while let Some(msg) = raw_messages.recv() {
@@ -89,10 +119,10 @@ impl CastMirrorSession {
                     }
                 }
             })
-        });
+        };
 
         let negotiated = Arc::new(AtomicBool::new(false));
-        threads.push({
+        let event_pump = {
             let session = session.clone();
             let negotiated = negotiated.clone();
             std::thread::spawn(move || {
@@ -109,7 +139,7 @@ impl CastMirrorSession {
                     }
                 }
             })
-        });
+        };
 
         tracing::info!(device = %device.name, "sending Cast Streaming OFFER");
         sender.negotiate();
@@ -127,8 +157,9 @@ impl CastMirrorSession {
         pipeline.set_state(gst::State::Playing).context("failed to start the encode pipeline")?;
         tracing::info!(device = %device.name, "mirroring started");
 
-        threads.push({
+        let frame_pump = {
             let device_name = device.name.clone();
+            let sender = sender.clone();
             std::thread::spawn(move || {
                 let result = frame_pump_loop(&appsink, &encoder, &sender);
                 if let Err(e) = result {
@@ -140,15 +171,35 @@ impl CastMirrorSession {
                 // thread than drop the notification.
                 let _ = daemon_tx.blocking_send(DaemonCommand::SessionEnded);
             })
-        });
+        };
 
-        Ok(Self { pipeline, session, capture: Some(capture), threads })
+        Ok(Self {
+            pipeline,
+            session,
+            capture: Some(capture),
+            sender: Some(sender),
+            message_pump: Some(message_pump),
+            event_pump: Some(event_pump),
+            frame_pump: Some(frame_pump),
+        })
     }
 
-    /// Tears down the session: stops the pipeline (which unblocks the frame
-    /// pump thread's blocking `appsink.pull_sample()` call), stops the
-    /// CASTV2 session (which ends its io thread, closing the channels the
-    /// other two pump threads block on), then joins every thread.
+    /// Tears down the session. Order matters and is not interchangeable:
+    ///
+    /// 1. Pipeline to `Null` -- unblocks the frame pump's blocking
+    ///    `appsink.pull_sample()`, so it can exit and release its
+    ///    `Arc<CastStreamSender>`.
+    /// 2. Stop the CASTV2 session -- ends its io thread, closing the
+    ///    raw-message channel the message pump blocks on, so it too can exit
+    ///    and release its `Arc`.
+    /// 3. Join those two. After this, no thread is calling into the FFI
+    ///    session and `self.sender` holds the only remaining `Arc`.
+    /// 4. Drop `self.sender` -- runs `breadcast_caststream_sender_destroy`
+    ///    (blocking until openscreen's threads stop) at a point where
+    ///    nothing else can be mid-call into it, and closes the FFI event
+    ///    channel.
+    /// 5. Only *then* join the event pump, which blocks on that channel and
+    ///    would deadlock if joined before step 4.
     pub async fn stop(mut self) {
         if let Err(e) = self.pipeline.set_state(gst::State::Null) {
             tracing::warn!(error = ?e, "failed to stop the encode pipeline cleanly");
@@ -161,16 +212,62 @@ impl CastMirrorSession {
                 tracing::warn!(error = ?e, "failed to cleanly close the portal capture session");
             }
         }
-        for thread in self.threads.drain(..) {
-            // These threads all end once the pipeline/session teardown
-            // above propagates to them (see this method's own doc comment)
-            // -- `spawn_blocking` just keeps `.join()`'s wait off the async
-            // runtime's worker threads.
-            if let Err(panic) = tokio::task::spawn_blocking(move || thread.join()).await {
-                tracing::warn!(error = ?panic, "mirror session pump thread join task panicked");
-            }
+
+        join_pump(self.frame_pump.take(), "frame").await;
+        join_pump(self.message_pump.take(), "message").await;
+
+        // Step 4: the blocking FFI teardown, kept off the async runtime's
+        // worker threads for the same reason the joins are.
+        if let Some(sender) = self.sender.take() {
+            let _ = tokio::task::spawn_blocking(move || drop(sender)).await;
         }
+
+        join_pump(self.event_pump.take(), "event").await;
     }
+}
+
+/// `spawn_blocking` just keeps `.join()`'s wait off the async runtime's
+/// worker threads.
+async fn join_pump(handle: Option<std::thread::JoinHandle<()>>, what: &str) {
+    let Some(handle) = handle else { return };
+    if let Err(panic) = tokio::task::spawn_blocking(move || handle.join()).await {
+        tracing::warn!(pump = what, error = ?panic, "mirror session pump thread join task panicked");
+    }
+}
+
+/// One step of the encoder-bitrate congestion-control loop: given the
+/// currently-applied target and openscreen's latest bandwidth estimate,
+/// returns the new target in kbps.
+///
+/// openscreen's `BandwidthEstimator` deliberately *under*-estimates capacity
+/// whenever the transmit rate is below it (see its class comment in
+/// `vendor/openscreen/cast/streaming/impl/bandwidth_estimator.h`), and
+/// prescribes a TCP-like response: cut hard when the estimate is below the
+/// current target, ramp back up *gradually* when it's above. An earlier
+/// version of this loop instead did `target = 0.85 * estimate` every second
+/// unconditionally, which multiplies the target by <= 0.85 once a second
+/// with no way back up -- 4000 kbps collapses past 1500 within ~6 seconds
+/// and pins at the floor, which is exactly the "low quality / compression
+/// artifacts" symptom, on a perfectly healthy LAN.
+///
+/// An estimate of 0 means "not enough recent data to say" (documented
+/// return value), and must leave the target alone rather than be treated as
+/// a zero-bandwidth link.
+fn bitrate_control_step(current_kbps: u32, estimate_bps: i32) -> u32 {
+    if estimate_bps <= 0 {
+        return current_kbps;
+    }
+    let estimate_kbps = (estimate_bps / 1000) as u32;
+    let next = if estimate_kbps < current_kbps {
+        // Below target: back off immediately to just under the estimate.
+        ((estimate_kbps as f64) * 0.85) as u32
+    } else {
+        // Headroom: probe upward by 10% per second, not straight to the
+        // estimate -- the estimate is a lower bound, and jumping to it
+        // oscillates.
+        current_kbps + current_kbps / 10
+    };
+    next.clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS)
 }
 
 fn frame_pump_loop(
@@ -179,13 +276,29 @@ fn frame_pump_loop(
     sender: &CastStreamSender,
 ) -> Result<()> {
     let mut last_bitrate_update = std::time::Instant::now();
+    let mut current_kbps = INITIAL_BITRATE_KBPS;
+    // `needs_key_frame()` is a snapshot of an atomic the C++ side only
+    // refreshes every 100ms, so it stays true for several frames after a
+    // request has already been sent upstream. Firing a force-key-unit event
+    // per frame in that window makes the encoder emit a burst of IDRs, which
+    // under CBR eats the whole bitrate budget and produces a visible quality
+    // dip on every picture-loss report. One request per refresh window is
+    // enough.
+    let mut last_key_frame_request: Option<std::time::Instant> = None;
     loop {
         let Some((data, is_key_frame, capture_time_us)) = pull_encoded_frame(appsink)? else {
             return Ok(()); // EOS -- pipeline was set to Null, or the portal source ended
         };
 
-        if sender.needs_key_frame() && !is_key_frame {
+        if sender.needs_key_frame()
+            && !is_key_frame
+            && last_key_frame_request.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(250))
+        {
             request_key_frame(appsink);
+            last_key_frame_request = Some(std::time::Instant::now());
+        }
+        if is_key_frame {
+            last_key_frame_request = None;
         }
 
         if let Err(e) = sender.enqueue_frame(&data, is_key_frame, capture_time_us) {
@@ -193,10 +306,49 @@ fn frame_pump_loop(
         }
 
         if last_bitrate_update.elapsed() >= std::time::Duration::from_secs(1) {
-            let bps = sender.estimated_bandwidth_bps();
-            let target_kbps = ((bps as f64 * 0.85) / 1000.0).max(500.0) as u32;
-            set_video_bitrate_kbps(encoder, target_kbps);
+            let next_kbps = bitrate_control_step(current_kbps, sender.estimated_bandwidth_bps());
+            if next_kbps != current_kbps {
+                current_kbps = next_kbps;
+                set_video_bitrate_kbps(encoder, current_kbps);
+            }
             last_bitrate_update = std::time::Instant::now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_estimate_leaves_the_target_alone() {
+        assert_eq!(bitrate_control_step(4000, 0), 4000);
+        assert_eq!(bitrate_control_step(4000, -1), 4000);
+    }
+
+    #[test]
+    fn headroom_ramps_up_gradually_and_is_capped() {
+        assert_eq!(bitrate_control_step(4000, 20_000_000), 4400);
+        assert_eq!(bitrate_control_step(MAX_BITRATE_KBPS, 20_000_000), MAX_BITRATE_KBPS);
+    }
+
+    #[test]
+    fn a_low_estimate_backs_off_but_not_below_the_floor() {
+        assert_eq!(bitrate_control_step(4000, 2_000_000), 1700);
+        assert_eq!(bitrate_control_step(4000, 100_000), MIN_BITRATE_KBPS);
+    }
+
+    /// The regression this loop exists to prevent: a *steady* estimate at
+    /// roughly the current encode rate must hold the target there (AIMD
+    /// oscillates a little around it, which is fine), not ratchet it down
+    /// once per second the way `target = 0.85 * estimate` did -- that
+    /// reached the floor in about a dozen iterations.
+    #[test]
+    fn a_steady_estimate_does_not_spiral_downward() {
+        let mut kbps = 4000;
+        for _ in 0..60 {
+            kbps = bitrate_control_step(kbps, 4_000_000);
+            assert!(kbps >= 3000, "target spiralled down to {kbps} kbps on a steady 4 Mbps estimate");
         }
     }
 }

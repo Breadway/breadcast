@@ -62,15 +62,37 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
     // (stretches to 16:9) — correctness/compatibility first, an
     // aspect-preserving scale (letterbox via `videoscale
     // add-borders=true`) is a follow-up, not a blocker.
+    // HLS segment sizing is *the* dominant term in this path's end-to-end
+    // latency, and the two knobs are coupled: a segment can only be cut on a
+    // key frame, so the real segment duration is `max(target-duration,
+    // GOP length)` no matter what `target-duration` says. With the previous
+    // `target-duration=2` + `key-int-max=60` (60 frames / 30fps = a 2s GOP),
+    // segments were 2s, and a renderer that buffers the customary three of
+    // them before starting playback sits ~6s behind live -- on top of
+    // however much of the playlist it decides to start from. `dlna_mirror.rs`
+    // then waited for 3 segments to exist before even handing over the URL,
+    // adding another ~6s of already-stale content.
+    //
+    // 1s segments (GOP dropped to 30 frames to make that actually
+    // achievable) roughly halve that. Going below 1s is not worth it here:
+    // MPEG-TS + a per-segment key frame means shorter segments cost real
+    // bitrate, and classic (non-LL) HLS clients don't reliably honour
+    // sub-second target durations anyway. Genuinely low latency on this path
+    // needs LL-HLS, which `hlssink3` does not implement -- the Cast
+    // Streaming path (`build_video_pipeline_for_streaming`) is the
+    // low-latency answer, and this one is the compatibility answer.
+    //
+    // `playlist-length`/`max-files` shrink to match so the playlist doesn't
+    // advertise a long backlog of stale segments for a client to start from.
     let pipeline_str = format!(
         "pipewiresrc path={video_node_id} do-timestamp=true ! \
          videoconvert ! videoscale ! videorate ! \
          video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! \
-         vah264enc bitrate=4000 key-int-max=60 rate-control=cbr ! \
+         vah264enc bitrate=4000 key-int-max=30 rate-control=cbr ! \
          video/x-h264,profile=main ! \
          h264parse config-interval=1 ! \
          hlssink.video \
-         hlssink3 name=hlssink target-duration=2 playlist-length=6 max-files=10"
+         hlssink3 name=hlssink target-duration=1 playlist-length=3 max-files=6"
     );
 
     let element = gst::parse::launch(&pipeline_str).context("failed to parse GStreamer pipeline")?;
@@ -160,22 +182,34 @@ pub fn build_video_pipeline_for_streaming(
 /// Pulls one complete Annex-B H.264 access unit from `appsink`, blocking
 /// until one is available. Returns `None` once the pipeline reaches EOS or
 /// the sink otherwise stops (e.g. pipeline torn down from another thread).
+///
+/// A buffer with no PTS is skipped (this pulls the next one instead) rather
+/// than reported with a substituted timestamp, as an earlier version did
+/// with `.unwrap_or(0)`. That substitution was actively dangerous rather
+/// than merely imprecise: openscreen derives the frame's RTP timestamp from
+/// this value and enforces strict monotonicity with a *fatal* `OSP_CHECK`
+/// (`sender_impl.cc`'s `OSP_CHECK_GT(frame.rtp_timestamp, ...)`), not an
+/// error return -- so a single PTS-less buffer part-way into a session would
+/// abort the whole daemon. `facade.cc` independently drops non-monotonic
+/// capture times as a second line of defence; neither guard makes the other
+/// redundant, since `enqueue_frame` is a public FFI entry point that has to
+/// hold up against any caller.
 pub fn pull_encoded_frame(appsink: &gst_app::AppSink) -> Result<Option<(Vec<u8>, bool, i64)>> {
-    let sample = match appsink.pull_sample() {
-        Ok(sample) => sample,
-        Err(_) if appsink.is_eos() => return Ok(None),
-        Err(e) => bail!("appsink pull_sample failed: {e}"),
-    };
-    let buffer = sample.buffer().context("pulled sample had no buffer")?;
-    let map = buffer.map_readable().context("failed to map sample buffer readable")?;
-    let is_key_frame = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
-    // `.unwrap_or(0)` rather than propagating a missing PTS as an error:
-    // CastStreamSender::enqueue_frame only needs monotonically-increasing,
-    // real-elapsed-time-proportional values (see its doc comment) -- an
-    // occasional buffer with no PTS shouldn't abort an otherwise-live
-    // stream over it.
-    let capture_time_us = buffer.pts().map(|t| t.useconds() as i64).unwrap_or(0);
-    Ok(Some((map.as_slice().to_vec(), is_key_frame, capture_time_us)))
+    loop {
+        let sample = match appsink.pull_sample() {
+            Ok(sample) => sample,
+            Err(_) if appsink.is_eos() => return Ok(None),
+            Err(e) => bail!("appsink pull_sample failed: {e}"),
+        };
+        let buffer = sample.buffer().context("pulled sample had no buffer")?;
+        let Some(capture_time_us) = buffer.pts().map(|t| t.useconds() as i64) else {
+            tracing::debug!("skipped an encoded frame with no PTS");
+            continue;
+        };
+        let map = buffer.map_readable().context("failed to map sample buffer readable")?;
+        let is_key_frame = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
+        return Ok(Some((map.as_slice().to_vec(), is_key_frame, capture_time_us)));
+    }
 }
 
 /// Sends an upstream "force key unit" event from `appsink`, propagating to

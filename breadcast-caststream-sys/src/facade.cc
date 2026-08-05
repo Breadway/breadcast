@@ -44,6 +44,34 @@ struct CastStreamSender {
   bool have_origin = false;
   int64_t origin_capture_time_us = 0;
 
+  // The capture timestamp of the last frame actually handed to
+  // Sender::EnqueueFrame. openscreen enforces strictly-increasing RTP
+  // timestamps with a *fatal* OSP_CHECK_GT (sender_impl.cc), not an error
+  // return -- so a single frame arriving with a non-increasing capture time
+  // (a buffer with no PTS, which the GStreamer side substitutes 0 for; a
+  // clock reset on portal source change; any encoder that ever reorders
+  // output) would abort the whole process. Dropping such a frame instead
+  // costs at most one frame of video. Only touched on the TaskRunner
+  // thread.
+  bool have_last_capture_time = false;
+  int64_t last_capture_time_us = 0;
+
+  // Set by breadcast_caststream_sender_destroy *before* it posts its
+  // teardown task, and checked by the self-rescheduling poll below.
+  //
+  // Without this, the poll task (posted with a 100ms delay, so it is the one
+  // task that can be scheduled to run *after* an already-queued teardown
+  // task) dereferences `environment` after teardown has reset it -- a null
+  // `unique_ptr<Environment>`, whose `task_runner()` accessor immediately
+  // dereferences a member -- i.e. a hard SIGSEGV on openscreen's TaskRunner
+  // thread. If it lands even later it is a use-after-free of `this`, since
+  // destroy() `delete`s this struct once the teardown task completes.
+  // TaskRunnerImpl's shutdown has an explicit "flushing phase" that keeps
+  // running runnable tasks, and PlatformClientPosix::ShutDown()'s quit task
+  // is queued *behind* whatever is already pending, so this is a race the
+  // teardown path can and does lose.
+  std::atomic<bool> shutting_down{false};
+
   // negotiated uses acquire/release so that once
   // breadcast_caststream_sender_enqueue_frame observes it true (from an
   // arbitrary caller thread), `session->video_sender()` is guaranteed
@@ -62,8 +90,14 @@ struct CastStreamSender {
   BreadcastOnPictureLostFn rust_on_picture_lost = nullptr;
 
   void SchedulePoll() {
+    if (shutting_down.load(std::memory_order_acquire) || !environment) {
+      return;
+    }
     environment->task_runner().PostTaskWithDelay(
         [this] {
+          if (shutting_down.load(std::memory_order_acquire)) {
+            return;
+          }
           if (session && session->video_sender()) {
             needs_key_frame.store(session->video_sender()->NeedsKeyFrame(),
                                   std::memory_order_relaxed);
@@ -186,6 +220,10 @@ CastStreamSender* breadcast_caststream_sender_create(
 
 void breadcast_caststream_sender_negotiate(CastStreamSender* sender) {
   sender->environment->task_runner().PostTask([sender] {
+    if (sender->shutting_down.load(std::memory_order_acquire) ||
+        !sender->session) {
+      return;
+    }
     sender->session->Negotiate();
     sender->SchedulePoll();
   });
@@ -202,6 +240,10 @@ void breadcast_caststream_sender_on_message(CastStreamSender* sender,
   auto ns = std::make_shared<std::string>(message_namespace, message_namespace_len);
   auto body = std::make_shared<std::string>(message, message_len);
   sender->environment->task_runner().PostTask([sender, source, ns, body] {
+    if (sender->shutting_down.load(std::memory_order_acquire) ||
+        !sender->message_port) {
+      return;
+    }
     sender->message_port->DeliverMessage(*source, *ns, *body);
   });
 }
@@ -225,8 +267,21 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
     using namespace openscreen;
     using namespace openscreen::cast;
 
+    if (sender->shutting_down.load(std::memory_order_acquire) ||
+        !sender->session) {
+      return;
+    }
     Sender* video_sender = sender->session->video_sender();
     if (!video_sender) {
+      return;
+    }
+
+    // See `last_capture_time_us`: openscreen aborts the process (fatal
+    // OSP_CHECK, not an error return) if RTP timestamps ever fail to
+    // strictly increase, so a non-monotonic capture time has to be dropped
+    // here rather than passed through.
+    if (sender->have_last_capture_time &&
+        capture_time_us <= sender->last_capture_time_us) {
       return;
     }
 
@@ -234,6 +289,8 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
       sender->have_origin = true;
       sender->origin_capture_time_us = capture_time_us;
     }
+    sender->have_last_capture_time = true;
+    sender->last_capture_time_us = capture_time_us;
 
     const FrameId frame_id = video_sender->GetNextFrameId();
     const FrameId referenced_frame_id =
@@ -277,6 +334,12 @@ void breadcast_caststream_sender_destroy(CastStreamSender* sender) {
   if (!sender) {
     return;
   }
+  // Latched *before* the teardown task is posted so the self-rescheduling
+  // poll (see CastStreamSender::shutting_down) stops re-arming itself and
+  // no longer touches `environment`/`session` -- both of which the teardown
+  // task below is about to reset out from under it.
+  sender->shutting_down.store(true, std::memory_order_release);
+
   // These must be torn down on the TaskRunner thread (they hold raw
   // references into it and into `environment`), so hop over there and block
   // until it's done before shutting the TaskRunner itself down.

@@ -81,7 +81,13 @@ impl DlnaMirrorSession {
             .context("failed to start the HLS HTTP server")?;
         let stream_url = http.url(lan_ip, "playlist.m3u8");
 
-        wait_for_playlist_segments(&output_dir.join("playlist.m3u8"), 3, Duration::from_secs(20))
+        // Two segments, not three: this is a "don't hand the renderer a 404
+        // playlist" guard, and every segment waited for here is a segment of
+        // already-stale video sitting between the renderer and live (see
+        // `build_video_pipeline`'s note on HLS latency). Two is the minimum
+        // that still proves the encoder is genuinely producing output rather
+        // than having emitted one segment and stalled.
+        wait_for_playlist_segments(&output_dir.join("playlist.m3u8"), 2, Duration::from_secs(20))
             .await
             .context("encode pipeline never produced playable HLS segments")?;
 
