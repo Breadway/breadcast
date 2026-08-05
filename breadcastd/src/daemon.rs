@@ -163,8 +163,11 @@ impl Daemon {
                     let _ = reply.send(Ok(()));
                 }
                 Err(e) => {
-                    bread_events::emit_mirroring_failed(&self.bread_client, &device.id, &e.to_string());
-                    let _ = reply.send(Err(e.to_string()));
+                    // `{e:#}` (not `{e}`/`to_string()`) so the full anyhow
+                    // context chain reaches the caller/GUI instead of just
+                    // the outermost ".context()" message.
+                    bread_events::emit_mirroring_failed(&self.bread_client, &device.id, &format!("{e:#}"));
+                    let _ = reply.send(Err(format!("{e:#}")));
                 }
             }
             return;
@@ -184,8 +187,8 @@ impl Daemon {
                     let _ = reply.send(Ok(()));
                 }
                 Err(e) => {
-                    bread_events::emit_mirroring_failed(&self.bread_client, &device.url, &e.to_string());
-                    let _ = reply.send(Err(e.to_string()));
+                    bread_events::emit_mirroring_failed(&self.bread_client, &device.url, &format!("{e:#}"));
+                    let _ = reply.send(Err(format!("{e:#}")));
                 }
             }
             return;
