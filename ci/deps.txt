@@ -1,0 +1,39 @@
+# Build-time deps layered onto the shared bread-ci image on top of its base
+# set (base-devel git pkgconf rust gtk4 libadwaita gtk4-layer-shell graphene
+# -- see bread-ecosystem's ci/Containerfile). This is NOT bakery.toml's
+# system_deps list (that's runtime: what an end-user machine needs to run
+# breadcast/breadcastd) -- it's what's actually pkg-config-probed or linked
+# against while *compiling* the crate, verified against:
+#
+#   - breadcast-caststream-sys/build.rs, which calls
+#     pkg_config::probe_library("jsoncpp") and
+#     pkg_config::probe_library("libcrypto") to build+link the vendored
+#     openscreen Cast Streaming C++ sources. `pacman -Fl jsoncpp` /
+#     `pacman -Fl openssl` confirm both ship their headers AND .pc files in
+#     the same package (jsoncpp.pc, libcrypto.pc) -- no separate -dev split
+#     on Arch, so the runtime package name is also the build-time one.
+#
+#   - Cargo.lock, which pulls in gstreamer-sys/-base-sys (breadcast-core,
+#     breadcastd depend on the `gstreamer` crate directly) and
+#     gstreamer-app-sys/-video-sys (breadcast-core's `gstreamer-app` /
+#     `gstreamer-video` deps, used by the capture/encode pipeline). Their
+#     .pc files (gstreamer-1.0.pc, gstreamer-base-1.0.pc from the
+#     `gstreamer` package; gstreamer-app-1.0.pc, gstreamer-video-1.0.pc from
+#     `gst-plugins-base-libs`) come from these two packages, not from
+#     `gtk4`'s own transitive pull of them -- listed explicitly here so the
+#     build doesn't silently depend on an incidental side effect of gtk4's
+#     dependency graph.
+#
+# Deliberately NOT included: gst-plugin-pipewire, gst-plugins-bad,
+# gst-plugin-hlssink3, gst-plugin-va (all in bakery.toml's system_deps).
+# These are GStreamer elements referenced only by factory-name string at
+# runtime (e.g. "vah264enc", "hlssink3" -- see breadcast-core/src/pipeline/
+# mod.rs), loaded dynamically via the plugin registry, never linked by any
+# Rust sys crate in Cargo.lock. `pacman -Fl` on all four ships no headers
+# breadcast compiles against (gst-plugin-hlssink3 has one .pc file,
+# gsthlssink3.pc, but nothing in Cargo.lock binds to it) -- pure runtime
+# dependencies, correctly excluded from the build image.
+gstreamer
+gst-plugins-base-libs
+jsoncpp
+openssl
