@@ -204,8 +204,25 @@ impl CastMirrorSession {
         if let Err(e) = self.pipeline.set_state(gst::State::Null) {
             tracing::warn!(error = ?e, "failed to stop the encode pipeline cleanly");
         }
-        if let Err(e) = self.session.stop() {
-            tracing::warn!(error = ?e, "failed to cleanly stop the cast session");
+        // `CastSession::stop` blocks on a round trip the receiver has to
+        // answer, over a `rust_cast` connection that offers no read
+        // timeout -- if the receiver has gone unresponsive (wedged
+        // decoder, dropped off the network, etc.) that round trip never
+        // returns. This actor processes one command at a time, so an
+        // unbounded wait here doesn't just fail this stop -- it
+        // permanently freezes the entire daemon (every future IPC
+        // request hangs too), recoverable only by killing the process.
+        // Bound it: if the receiver hasn't answered in 5s, give up on a
+        // graceful stop and tear down anyway. The io thread may leak
+        // (still blocked in that same call), but a single leaked thread
+        // beats an unrecoverable daemon.
+        let session = self.session.clone();
+        let stop_result = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::task::spawn_blocking(move || session.stop())).await;
+        match stop_result {
+            Ok(Ok(Err(e))) => tracing::warn!(error = ?e, "failed to cleanly stop the cast session"),
+            Ok(Err(panic)) => tracing::warn!(error = ?panic, "cast session stop task panicked"),
+            Err(_) => tracing::warn!("cast session did not acknowledge stop within 5s (receiver unresponsive?) -- tearing down anyway"),
+            Ok(Ok(Ok(()))) => {}
         }
         if let Some(capture) = self.capture.take() {
             if let Err(e) = capture.close().await {
@@ -226,12 +243,18 @@ impl CastMirrorSession {
     }
 }
 
-/// `spawn_blocking` just keeps `.join()`'s wait off the async runtime's
-/// worker threads.
+/// Bounded to 5s for the same reason [`CastMirrorSession::stop`]'s own wait
+/// on `CastSession::stop` is: `message_pump` blocks on a channel only the
+/// (possibly wedged, per that comment) cast session io thread ever closes,
+/// so an unbounded join here is exactly as capable of freezing the whole
+/// daemon actor forever. A timed-out thread is abandoned rather than
+/// joined -- it may still be running, but nothing here waits on it again.
 async fn join_pump(handle: Option<std::thread::JoinHandle<()>>, what: &str) {
     let Some(handle) = handle else { return };
-    if let Err(panic) = tokio::task::spawn_blocking(move || handle.join()).await {
-        tracing::warn!(pump = what, error = ?panic, "mirror session pump thread join task panicked");
+    match tokio::time::timeout(std::time::Duration::from_secs(5), tokio::task::spawn_blocking(move || handle.join())).await {
+        Ok(Err(panic)) => tracing::warn!(pump = what, error = ?panic, "mirror session pump thread join task panicked"),
+        Err(_) => tracing::warn!(pump = what, "mirror session pump thread did not exit within 5s -- abandoning it"),
+        Ok(Ok(_)) => {}
     }
 }
 

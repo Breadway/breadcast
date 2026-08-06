@@ -48,8 +48,15 @@ pub struct VideoParams {
 impl Default for VideoParams {
     fn default() -> Self {
         Self {
-            width: 1920,
-            height: 1080,
+            // Must match what `build_video_pipeline_for_streaming` actually
+            // encodes (`breadcast-core/src/pipeline/mod.rs`), not just what
+            // we'd like to send -- this OFFER's resolution is what the
+            // receiver allocates its decoder/output surface for. Advertising
+            // 1920x1080 while actually sending 1280x720 frames is a real
+            // protocol mismatch that plausibly explains a receiver decoder
+            // corrupting/freezing rather than just looking soft.
+            width: 1280,
+            height: 720,
             max_bitrate_bps: 8_000_000,
             max_frame_rate_numerator: 30,
             max_frame_rate_denominator: 1,
