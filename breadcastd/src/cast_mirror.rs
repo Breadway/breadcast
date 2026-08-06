@@ -149,8 +149,13 @@ impl CastMirrorSession {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
         if !negotiated.load(Ordering::Acquire) {
-            let _ = session.stop();
-            capture.close().await.ok();
+            // Bounded for the same reason `Self::stop`'s calls are -- an
+            // unresponsive receiver (which is exactly what "negotiation
+            // timed out" implies) can wedge either of these forever
+            // otherwise, taking the whole single-threaded daemon actor
+            // down with it before this even gets to return an error.
+            stop_session_bounded(&session).await;
+            close_capture_bounded(capture).await;
             anyhow::bail!("never received an ANSWER from {} (negotiation timed out)", device.name);
         }
 
@@ -204,30 +209,9 @@ impl CastMirrorSession {
         if let Err(e) = self.pipeline.set_state(gst::State::Null) {
             tracing::warn!(error = ?e, "failed to stop the encode pipeline cleanly");
         }
-        // `CastSession::stop` blocks on a round trip the receiver has to
-        // answer, over a `rust_cast` connection that offers no read
-        // timeout -- if the receiver has gone unresponsive (wedged
-        // decoder, dropped off the network, etc.) that round trip never
-        // returns. This actor processes one command at a time, so an
-        // unbounded wait here doesn't just fail this stop -- it
-        // permanently freezes the entire daemon (every future IPC
-        // request hangs too), recoverable only by killing the process.
-        // Bound it: if the receiver hasn't answered in 5s, give up on a
-        // graceful stop and tear down anyway. The io thread may leak
-        // (still blocked in that same call), but a single leaked thread
-        // beats an unrecoverable daemon.
-        let session = self.session.clone();
-        let stop_result = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::task::spawn_blocking(move || session.stop())).await;
-        match stop_result {
-            Ok(Ok(Err(e))) => tracing::warn!(error = ?e, "failed to cleanly stop the cast session"),
-            Ok(Err(panic)) => tracing::warn!(error = ?panic, "cast session stop task panicked"),
-            Err(_) => tracing::warn!("cast session did not acknowledge stop within 5s (receiver unresponsive?) -- tearing down anyway"),
-            Ok(Ok(Ok(()))) => {}
-        }
+        stop_session_bounded(&self.session).await;
         if let Some(capture) = self.capture.take() {
-            if let Err(e) = capture.close().await {
-                tracing::warn!(error = ?e, "failed to cleanly close the portal capture session");
-            }
+            close_capture_bounded(capture).await;
         }
 
         join_pump(self.frame_pump.take(), "frame").await;
@@ -240,6 +224,41 @@ impl CastMirrorSession {
         }
 
         join_pump(self.event_pump.take(), "event").await;
+    }
+}
+
+/// `CastSession::stop` blocks on a round trip the receiver has to answer,
+/// over a `rust_cast` connection that offers no read timeout -- if the
+/// receiver has gone unresponsive (wedged decoder, dropped off the
+/// network, etc.) that round trip never returns. Both callers run inside
+/// the single-threaded daemon actor, so an unbounded wait here doesn't
+/// just fail one stop -- it permanently freezes the entire daemon (every
+/// future IPC request hangs too), recoverable only by killing the
+/// process. Bound it: if the receiver hasn't answered in 5s, give up on a
+/// graceful stop and let teardown continue anyway. The io thread may leak
+/// (still blocked in that same call), but a single leaked thread beats an
+/// unrecoverable daemon.
+async fn stop_session_bounded(session: &CastSession) {
+    let session = session.clone();
+    match tokio::time::timeout(std::time::Duration::from_secs(5), tokio::task::spawn_blocking(move || session.stop())).await {
+        Ok(Ok(Err(e))) => tracing::warn!(error = ?e, "failed to cleanly stop the cast session"),
+        Ok(Err(panic)) => tracing::warn!(error = ?panic, "cast session stop task panicked"),
+        Err(_) => tracing::warn!("cast session did not acknowledge stop within 5s (receiver unresponsive?) -- tearing down anyway"),
+        Ok(Ok(Ok(()))) => {}
+    }
+}
+
+/// Same reasoning as [`stop_session_bounded`]: `capture.close()` is a
+/// `Session::close()` D-Bus call to the xdg-desktop-portal backend, which
+/// this project has observed to be flaky (the "Failed to populate
+/// properties cache... UnknownMethod" warnings logged on every portal
+/// session) -- an unbounded `.await` here is just as capable of freezing
+/// the whole daemon actor if that call never gets a reply.
+async fn close_capture_bounded(capture: CaptureSession) {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), capture.close()).await {
+        Ok(Err(e)) => tracing::warn!(error = ?e, "failed to cleanly close the portal capture session"),
+        Err(_) => tracing::warn!("portal capture session did not close within 5s -- abandoning it"),
+        Ok(Ok(())) => {}
     }
 }
 
@@ -308,10 +327,19 @@ fn frame_pump_loop(
     // dip on every picture-loss report. One request per refresh window is
     // enough.
     let mut last_key_frame_request: Option<std::time::Instant> = None;
+    // Pulled-frame and successful-enqueue counters, logged once/sec
+    // alongside the bitrate step below -- otherwise a stalled pipeline
+    // (upstream not producing samples) and a stalled sender (producing
+    // samples nobody can get rid of) are both silent: this is a per-frame
+    // hot loop, so anything more than a periodic summary would flood the
+    // log rather than help debug either case.
+    let mut pulled_since_log: u32 = 0;
+    let mut enqueued_since_log: u32 = 0;
     loop {
         let Some((data, is_key_frame, capture_time_us)) = pull_encoded_frame(appsink)? else {
             return Ok(()); // EOS -- pipeline was set to Null, or the portal source ended
         };
+        pulled_since_log += 1;
 
         if sender.needs_key_frame()
             && !is_key_frame
@@ -324,8 +352,9 @@ fn frame_pump_loop(
             last_key_frame_request = None;
         }
 
-        if let Err(e) = sender.enqueue_frame(&data, is_key_frame, capture_time_us) {
-            tracing::debug!(error = ?e, "dropped a frame (not negotiated yet or backpressure)");
+        match sender.enqueue_frame(&data, is_key_frame, capture_time_us) {
+            Ok(()) => enqueued_since_log += 1,
+            Err(e) => tracing::debug!(error = ?e, "dropped a frame (not negotiated yet or backpressure)"),
         }
 
         if last_bitrate_update.elapsed() >= std::time::Duration::from_secs(1) {
@@ -334,6 +363,15 @@ fn frame_pump_loop(
                 current_kbps = next_kbps;
                 set_video_bitrate_kbps(encoder, current_kbps);
             }
+            tracing::debug!(
+                pulled_fps = pulled_since_log,
+                enqueued_fps = enqueued_since_log,
+                bitrate_kbps = current_kbps,
+                estimated_bandwidth_bps = sender.estimated_bandwidth_bps(),
+                "frame pump rate"
+            );
+            pulled_since_log = 0;
+            enqueued_since_log = 0;
             last_bitrate_update = std::time::Instant::now();
         }
     }
