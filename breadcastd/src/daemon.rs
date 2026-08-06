@@ -141,10 +141,10 @@ impl Daemon {
                 // `TcpStream::connect`ing to it fails outright; don't let
                 // one clobber an already-usable host just because it
                 // happened to resolve more recently.
-                let should_replace = match self.cast_devices.get(&device.id) {
-                    Some(existing) if is_link_local_v6(&device.host) && !is_link_local_v6(&existing.host) => false,
-                    _ => true,
-                };
+                let should_replace = !matches!(
+                    self.cast_devices.get(&device.id),
+                    Some(existing) if is_link_local_v6(&device.host) && !is_link_local_v6(&existing.host)
+                );
                 if should_replace {
                     self.cast_devices.insert(device.id.clone(), device);
                 }
