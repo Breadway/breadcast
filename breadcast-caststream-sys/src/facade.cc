@@ -80,6 +80,27 @@ struct CastStreamSender {
   std::atomic<bool> needs_key_frame{true};
   std::atomic<int32_t> estimated_bandwidth_bps{kDefaultBandwidthEstimateBps};
 
+  // Set (never cleared except by the one consuming read, see
+  // breadcast_caststream_sender_needs_key_frame below) whenever a frame gets
+  // silently dropped after already being encoded -- either
+  // Sender::EnqueueFrame() rejecting it (e.g. MAX_DURATION_IN_FLIGHT, the
+  // in-flight budget openscreen enforces) or the non-monotonic-capture-time
+  // guard below. Either way, vah264enc already encoded the *next* frame as a
+  // P-slice depending on the one that just got dropped -- the encoder has no
+  // idea the drop happened, since it happens downstream of encoding, at this
+  // FFI boundary. Left alone, that reference is now dangling: the receiver
+  // decodes it against whatever picture it last successfully received,
+  // producing a stuck or corrupted frame that only resolves at the next
+  // regularly-scheduled key frame (key-int-max=60 -- up to ~2s, longer still
+  // if that key frame is itself dropped the same way). Forcing a key frame
+  // on the very next enqueue turns "up to several seconds of corruption"
+  // into "one dropped frame, then a clean resync" -- a separate flag rather
+  // than reusing `needs_key_frame` directly because SchedulePoll's 100ms
+  // timer unconditionally overwrites that one with the Sender's own
+  // (unrelated) NeedsKeyFrame() reading, which would silently clobber this
+  // signal before frame_pump_loop ever observed it.
+  std::atomic<bool> frame_chain_broken{false};
+
   // The caller's own user_data + callbacks, as passed to `_create`. Not
   // called directly -- session.h/message_port_bridge.h are instead given
   // trampolines below (with `this` as their user_data) so this struct can
@@ -282,6 +303,7 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
     // here rather than passed through.
     if (sender->have_last_capture_time &&
         capture_time_us <= sender->last_capture_time_us) {
+      sender->frame_chain_broken.store(true, std::memory_order_relaxed);
       return;
     }
 
@@ -311,12 +333,15 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
                        ByteView(owned_data->data(), owned_data->size()));
 
     // EnqueueFrame()'s result (e.g. MAX_DURATION_IN_FLIGHT under backpressure)
-    // isn't propagated to the caller: by the time this runs, enqueue_frame()
-    // has already returned 0 synchronously (this call is posted, not
-    // immediate -- see facade.h's threading contract). Backpressure here just
-    // means this one frame is dropped; the encoder finds out indirectly via
-    // needs_key_frame()/estimated_bandwidth_bps() polling.
-    (void)video_sender->EnqueueFrame(frame);
+    // can't be propagated to enqueue_frame()'s caller synchronously -- by the
+    // time this runs, that call has already returned 0 (this call is posted,
+    // not immediate -- see facade.h's threading contract). What it *can* do
+    // is flag the drop so the next frame comes in clean -- see
+    // `frame_chain_broken`'s doc comment on why that matters here, not just
+    // for the encoder's bitrate.
+    if (video_sender->EnqueueFrame(frame) != Sender::OK) {
+      sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+    }
   });
 
   return 0;

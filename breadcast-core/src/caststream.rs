@@ -55,12 +55,14 @@ impl Default for VideoParams {
             // a resolution other than what's actually sent is a real
             // protocol mismatch that plausibly explains a receiver decoder
             // corrupting/freezing rather than just looking soft.
-            width: 1920,
-            height: 1080,
+            // Reverted from a brief 1920x1080 experiment -- see
+            // `build_video_pipeline_for_streaming`'s doc comment for why
+            // (the freeze wasn't a resolution/bandwidth problem at all).
+            width: 1280,
+            height: 720,
             // Kept equal to `breadcastd::cast_mirror::MAX_BITRATE_KBPS *
             // 1000` -- see that constant's doc comment for why 8 Mbps
-            // (this struct's previous value) isn't used here even though
-            // 1080p can look better with more headroom: real hardware
+            // (this struct's previous value) isn't used here: real hardware
             // testing showed the AIMD probe pinning to whatever this
             // ceiling is for the entire session once the estimator reports
             // (unreliably) that there's room, and 8 Mbps sustained was more
