@@ -73,6 +73,12 @@ impl ActiveSession {
     }
 }
 
+/// `host` strings come straight from mDNS resolution, so this just checks
+/// the address, not whether a zone id is attached (mDNS never gives us one).
+fn is_link_local_v6(host: &str) -> bool {
+    matches!(host.parse::<std::net::IpAddr>(), Ok(std::net::IpAddr::V6(v6)) if (v6.segments()[0] & 0xffc0) == 0xfe80)
+}
+
 struct Daemon {
     cast_devices: HashMap<String, CastDevice>,
     /// Keyed by `DlnaDevice::url`, the closest thing DLNA has to a stable
@@ -128,7 +134,20 @@ impl Daemon {
                 }
             }
             DaemonCommand::CastDeviceFound(device) => {
-                self.cast_devices.insert(device.id.clone(), device);
+                // mDNS resolves one physical device on every local address
+                // it has -- typically a private IPv4 and a link-local IPv6
+                // -- as separate events carrying the same id. A bare
+                // `fe80::` address has no interface scope attached, so
+                // `TcpStream::connect`ing to it fails outright; don't let
+                // one clobber an already-usable host just because it
+                // happened to resolve more recently.
+                let should_replace = match self.cast_devices.get(&device.id) {
+                    Some(existing) if is_link_local_v6(&device.host) && !is_link_local_v6(&existing.host) => false,
+                    _ => true,
+                };
+                if should_replace {
+                    self.cast_devices.insert(device.id.clone(), device);
+                }
                 self.broadcast_devices();
             }
             DaemonCommand::CastDeviceLost(id) => {

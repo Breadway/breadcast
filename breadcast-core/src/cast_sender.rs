@@ -326,9 +326,19 @@ fn run_io_loop(
                 // doc comment for why that's fine for this project's usage.
             }
             Ok(_) => {}
-            Err(e) => {
-                tracing::debug!(error = %e, "cast session io loop ending: receive error");
+            // Only end the loop on an error that means the connection
+            // itself is gone -- a single malformed/unexpected message (e.g.
+            // a MEDIA_STATUS missing a field this crate's struct treats as
+            // required) is a `Serialization`/`Parsing` error, not a dead
+            // socket, and used to take the whole receiver-status/control
+            // channel down with it for the rest of the session even though
+            // the RTP stream itself was unaffected.
+            Err(e @ (rust_cast::errors::Error::Io(_) | rust_cast::errors::Error::Tls(_) | rust_cast::errors::Error::Dns(_))) => {
+                tracing::debug!(error = %e, "cast session io loop ending: connection error");
                 return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cast session: ignoring unparseable/unexpected message");
             }
         }
     }
