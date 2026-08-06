@@ -24,7 +24,7 @@ use breadcast_caststream_sys::{
     self as sys, breadcast_caststream_sender_create, breadcast_caststream_sender_destroy,
     breadcast_caststream_sender_enqueue_frame, breadcast_caststream_sender_estimated_bandwidth_bps,
     breadcast_caststream_sender_needs_key_frame, breadcast_caststream_sender_negotiate,
-    breadcast_caststream_sender_on_message,
+    breadcast_caststream_sender_on_message, breadcast_caststream_sender_take_stats,
 };
 
 /// The Cast Streaming ("Mirroring") receiver app id, pre-installed on every
@@ -234,6 +234,22 @@ impl CastStreamSender {
             bail!("frame not enqueued (session not negotiated yet)");
         }
         Ok(())
+    }
+
+    /// A snapshot of how the *underlying* `Sender::EnqueueFrame` has been
+    /// answering, plus its in-flight window gauges. Reading resets the
+    /// counters, so polling once a second yields per-second rates.
+    ///
+    /// [`Self::enqueue_frame`] deliberately cannot report any of this: it
+    /// returns as soon as the frame is posted to openscreen's TaskRunner,
+    /// before the real accept/reject happens. Any "frames enqueued per
+    /// second" figure derived from its return value is therefore a count of
+    /// *attempts*, and stays pinned at the capture rate even while every
+    /// frame is being rejected downstream and the picture is frozen.
+    pub fn enqueue_stats(&self) -> sys::EnqueueStats {
+        let mut stats = sys::EnqueueStats::default();
+        unsafe { breadcast_caststream_sender_take_stats(self.raw, &mut stats) };
+        stats
     }
 
     /// True if the receiver wants a key frame as soon as possible. Cheap to

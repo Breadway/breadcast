@@ -24,10 +24,18 @@ namespace {
 
 // The minimum amount of media the Sender keeps in-flight, regardless of the
 // measured network round-trip time. This keeps the encoder pipeline flowing on
-// low-latency networks (roughly two video frames at 30 FPS). See
-// crbug.com/498035450.
+// low-latency networks. See crbug.com/498035450.
+//
+// LOCAL PATCH (breadcast): upstream is 66ms, roughly two video frames at
+// 30 FPS. That is only enough when the round-trip time is genuinely
+// negligible. Instrumented measurement against real hardware (a Chromecast
+// over Wi-Fi) showed RTT swinging between 57ms and 145ms, so a 66ms floor
+// leaves the send window narrower than a single round trip -- frames are
+// rejected with MAX_DURATION_IN_FLIGHT faster than acknowledgements can
+// free the window back up. A 200ms floor is ~6 frames at 30 FPS, enough to
+// cover one round trip at the worst observed RTT. See PATCHES.md.
 constexpr Clock::duration kMinSenderInFlight =
-    Clock::to_duration(milliseconds(66));
+    Clock::to_duration(milliseconds(200));
 
 }  // namespace
 

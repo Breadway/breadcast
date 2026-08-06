@@ -103,6 +103,59 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
                                                   int32_t is_key_frame,
                                                   int64_t capture_time_us);
 
+// A snapshot of why frames are (or aren't) making it into the Sender.
+//
+// The `enqueue_frame` entry point above cannot report this: it returns as
+// soon as the frame is *posted* to openscreen's TaskRunner, long before
+// Sender::EnqueueFrame actually runs and decides. So a caller watching only
+// its return value sees a 100% success rate even while every frame is being
+// rejected downstream -- which is exactly the blind spot that made a
+// multi-second picture freeze look, from the sender's own counters, like a
+// perfectly healthy 30fps stream.
+//
+// The four `enqueue_*` counters are cumulative-since-last-read: reading
+// them resets them to zero, so a caller polling once a second gets per-second
+// rates directly. The remaining fields are instantaneous gauges, sampled on
+// the TaskRunner thread at the moment of the most recent enqueue attempt.
+typedef struct BreadcastEnqueueStats {
+  // Sender::EnqueueFrame returned OK -- the frame is genuinely in flight.
+  int32_t enqueue_ok;
+  // Sender::PAYLOAD_TOO_LARGE -- the encoded access unit needs more RTP
+  // packets than the packetizer allows.
+  int32_t enqueue_payload_too_large;
+  // Sender::REACHED_ID_SPAN_LIMIT -- more than kMaxUnackedFrames (120)
+  // frames have gone unacknowledged.
+  int32_t enqueue_id_span_limit;
+  // Sender::MAX_DURATION_IN_FLIGHT -- the in-flight media window
+  // (see `in_flight_ms`/`max_in_flight_ms`) is full. The expected symptom
+  // of the receiver's acknowledgements stalling.
+  int32_t enqueue_max_duration_in_flight;
+  // Frames dropped by the facade before ever reaching EnqueueFrame, by the
+  // non-monotonic-capture-time guard in enqueue_frame.
+  int32_t dropped_non_monotonic;
+
+  // Sender::GetInFlightFrameCount() at the last enqueue attempt.
+  int32_t in_flight_frames;
+  // Sender::GetInFlightMediaDuration() at the last enqueue attempt, in ms --
+  // i.e. the media timespan between the oldest unacknowledged frame and the
+  // one being enqueued. Note this is a *timespan*, not a byte count: frame
+  // size has no bearing on it, so a large key frame is neither more nor less
+  // likely to be rejected than a small P-frame.
+  int32_t in_flight_ms;
+  // Sender::GetMaxInFlightMediaDuration() at the last enqueue attempt, in ms.
+  // A frame is rejected when `in_flight_ms` would exceed this. openscreen
+  // computes it as clamp(2*RTT, kMinSenderInFlight, playout_delay/3), so on
+  // a low-latency LAN it sits at the kMinSenderInFlight floor.
+  int32_t max_in_flight_ms;
+  // Sender::GetCurrentRoundTripTime() at the last enqueue attempt, in ms.
+  int32_t round_trip_time_ms;
+} BreadcastEnqueueStats;
+
+// Fills `out` with the current stats and resets the counters. Safe to call
+// from any thread; cheap, non-blocking, lock-free.
+void breadcast_caststream_sender_take_stats(CastStreamSender* sender,
+                                            BreadcastEnqueueStats* out);
+
 // True (nonzero) if the receiver wants a key frame as soon as possible.
 // Safe to poll frequently; cheap, non-blocking, lock-free.
 int32_t breadcast_caststream_sender_needs_key_frame(CastStreamSender* sender);

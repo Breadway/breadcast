@@ -45,6 +45,29 @@ pub type OnErrorFn =
 
 pub type OnPictureLostFn = extern "C" fn(user_data: *mut c_void);
 
+/// Mirrors `BreadcastEnqueueStats` in `facade.h` -- see that struct's doc
+/// comment for what each field means and why they exist at all (short
+/// version: `sender_enqueue_frame`'s return value reports only that the
+/// frame was *posted* to openscreen's TaskRunner, never whether
+/// `Sender::EnqueueFrame` subsequently accepted it, so it reads 100% success
+/// even while every frame is being rejected).
+///
+/// The `enqueue_*`/`dropped_*` fields are counts since the previous
+/// `sender_take_stats` call; the rest are instantaneous gauges.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnqueueStats {
+    pub enqueue_ok: i32,
+    pub enqueue_payload_too_large: i32,
+    pub enqueue_id_span_limit: i32,
+    pub enqueue_max_duration_in_flight: i32,
+    pub dropped_non_monotonic: i32,
+    pub in_flight_frames: i32,
+    pub in_flight_ms: i32,
+    pub max_in_flight_ms: i32,
+    pub round_trip_time_ms: i32,
+}
+
 unsafe extern "C" {
     /// Returns null on failure (e.g. an unparseable `remote_ip`, or the
     /// local UDP socket failed to bind).
@@ -112,6 +135,16 @@ unsafe extern "C" {
         is_key_frame: i32,
         capture_time_us: i64,
     ) -> i32;
+
+    /// Fills `out` with the current enqueue stats and resets the counters.
+    ///
+    /// # Safety
+    /// `sender` must be live and `out` must be a valid, writable pointer to
+    /// an `EnqueueStats` for the duration of this call.
+    pub fn breadcast_caststream_sender_take_stats(
+        sender: *mut CastStreamSender,
+        out: *mut EnqueueStats,
+    );
 
     /// # Safety
     /// `sender` must be live.

@@ -373,9 +373,25 @@ fn frame_pump_loop(
                 current_kbps = next_kbps;
                 set_video_bitrate_kbps(encoder, current_kbps);
             }
+            // `enqueued_fps` counts *posted* frames, not accepted ones (see
+            // `CastStreamSender::enqueue_stats`) -- it is the `accepted_fps`
+            // and `rejected_*` fields below that say whether video is
+            // actually reaching the receiver. A run where `enqueued_fps`
+            // holds at 30 while `accepted_fps` drops to 0 is a frozen
+            // picture, and nothing else logged here would show it.
+            let stats = sender.enqueue_stats();
             tracing::debug!(
                 pulled_fps = pulled_since_log,
                 enqueued_fps = enqueued_since_log,
+                accepted_fps = stats.enqueue_ok,
+                rejected_in_flight = stats.enqueue_max_duration_in_flight,
+                rejected_id_span = stats.enqueue_id_span_limit,
+                rejected_too_large = stats.enqueue_payload_too_large,
+                dropped_non_monotonic = stats.dropped_non_monotonic,
+                in_flight_frames = stats.in_flight_frames,
+                in_flight_ms = stats.in_flight_ms,
+                max_in_flight_ms = stats.max_in_flight_ms,
+                rtt_ms = stats.round_trip_time_ms,
                 bitrate_kbps = current_kbps,
                 estimated_bandwidth_bps = sender.estimated_bandwidth_bps(),
                 "frame pump rate"

@@ -62,3 +62,25 @@ There are no release/API-stability guarantees upstream. To update:
    (pulled in separately via gclient/DEPS in a full Chromium checkout).
    Reimplemented on `EVP_EncodeBlock`/`EVP_DecodeBlock` from system OpenSSL
    instead, same public interface.
+6. **`cast/streaming/impl/sender_impl.cc`** — raised `kMinSenderInFlight`
+   from upstream's 66ms to 200ms. This is a behaviour patch, not a
+   portability one, and is the only one here that changes what goes on the
+   wire — so unlike the others it should *not* be silently re-applied when
+   rolling the pin without re-measuring first.
+
+   `GetMaxInFlightMediaDuration()` sizes the sender's send window as
+   `clamp(2*RTT, kMinSenderInFlight, target_playout_delay/3)`. Upstream's
+   66ms floor assumes the RTT is negligible, which holds for Chrome's own
+   usage but not for breadcast's measured case: instrumenting real
+   `Sender::EnqueueFrame` result codes (see `BreadcastEnqueueStats` in
+   `../../src/facade.h`) against a Chromecast over Wi-Fi showed RTT of
+   57-145ms and a steady 3-40% of frames per second rejected with
+   `MAX_DURATION_IN_FLIGHT`. Because breadcast enqueues already-encoded
+   frames, each such rejection silently breaks the H.264 reference chain
+   rather than merely dropping a frame, which is what the user-visible
+   multi-second picture freezes turned out to be.
+
+   Pairs with `kTargetPlayoutDelay` in `../../src/session.cc`, which raises
+   the *ceiling* of that same clamp (the ceiling, not this floor, was the
+   binding constraint at 400ms playout delay). Both are needed: this floor
+   covers RTT dips, that ceiling covers the normal case.

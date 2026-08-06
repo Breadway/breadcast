@@ -1,6 +1,7 @@
 #include "facade.h"
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <memory>
 #include <string>
@@ -100,6 +101,20 @@ struct CastStreamSender {
   // (unrelated) NeedsKeyFrame() reading, which would silently clobber this
   // signal before frame_pump_loop ever observed it.
   std::atomic<bool> frame_chain_broken{false};
+
+  // See BreadcastEnqueueStats in facade.h. Counters are reset by the reading
+  // call; gauges are overwritten at every enqueue attempt. All relaxed --
+  // these are diagnostics, and a torn read across two of them costs nothing
+  // but a slightly inconsistent log line.
+  std::atomic<int32_t> enqueue_ok{0};
+  std::atomic<int32_t> enqueue_payload_too_large{0};
+  std::atomic<int32_t> enqueue_id_span_limit{0};
+  std::atomic<int32_t> enqueue_max_duration_in_flight{0};
+  std::atomic<int32_t> dropped_non_monotonic{0};
+  std::atomic<int32_t> in_flight_frames{0};
+  std::atomic<int32_t> in_flight_ms{0};
+  std::atomic<int32_t> max_in_flight_ms{0};
+  std::atomic<int32_t> round_trip_time_ms{0};
 
   // The caller's own user_data + callbacks, as passed to `_create`. Not
   // called directly -- session.h/message_port_bridge.h are instead given
@@ -304,6 +319,7 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
     if (sender->have_last_capture_time &&
         capture_time_us <= sender->last_capture_time_us) {
       sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+      sender->dropped_non_monotonic.fetch_add(1, std::memory_order_relaxed);
       return;
     }
 
@@ -339,12 +355,66 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
     // is flag the drop so the next frame comes in clean -- see
     // `frame_chain_broken`'s doc comment on why that matters here, not just
     // for the encoder's bitrate.
-    if (video_sender->EnqueueFrame(frame) != Sender::OK) {
-      sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+    // Sampled *before* the enqueue attempt, so these describe the state the
+    // Sender used to make its accept/reject decision below rather than the
+    // state after it. See BreadcastEnqueueStats in facade.h.
+    const auto to_ms = [](Clock::duration d) {
+      return static_cast<int32_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(d).count());
+    };
+    sender->in_flight_frames.store(
+        static_cast<int32_t>(video_sender->GetInFlightFrameCount()),
+        std::memory_order_relaxed);
+    sender->in_flight_ms.store(
+        to_ms(video_sender->GetInFlightMediaDuration(rtp_timestamp)),
+        std::memory_order_relaxed);
+    sender->max_in_flight_ms.store(
+        to_ms(video_sender->GetMaxInFlightMediaDuration()),
+        std::memory_order_relaxed);
+    sender->round_trip_time_ms.store(
+        to_ms(video_sender->GetCurrentRoundTripTime()),
+        std::memory_order_relaxed);
+
+    switch (video_sender->EnqueueFrame(frame)) {
+      case Sender::OK:
+        sender->enqueue_ok.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case Sender::PAYLOAD_TOO_LARGE:
+        sender->enqueue_payload_too_large.fetch_add(1, std::memory_order_relaxed);
+        sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+        break;
+      case Sender::REACHED_ID_SPAN_LIMIT:
+        sender->enqueue_id_span_limit.fetch_add(1, std::memory_order_relaxed);
+        sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+        break;
+      case Sender::MAX_DURATION_IN_FLIGHT:
+        sender->enqueue_max_duration_in_flight.fetch_add(1, std::memory_order_relaxed);
+        sender->frame_chain_broken.store(true, std::memory_order_relaxed);
+        break;
     }
   });
 
   return 0;
+}
+
+void breadcast_caststream_sender_take_stats(CastStreamSender* sender,
+                                            BreadcastEnqueueStats* out) {
+  if (!sender || !out) {
+    return;
+  }
+  out->enqueue_ok = sender->enqueue_ok.exchange(0, std::memory_order_relaxed);
+  out->enqueue_payload_too_large =
+      sender->enqueue_payload_too_large.exchange(0, std::memory_order_relaxed);
+  out->enqueue_id_span_limit =
+      sender->enqueue_id_span_limit.exchange(0, std::memory_order_relaxed);
+  out->enqueue_max_duration_in_flight =
+      sender->enqueue_max_duration_in_flight.exchange(0, std::memory_order_relaxed);
+  out->dropped_non_monotonic =
+      sender->dropped_non_monotonic.exchange(0, std::memory_order_relaxed);
+  out->in_flight_frames = sender->in_flight_frames.load(std::memory_order_relaxed);
+  out->in_flight_ms = sender->in_flight_ms.load(std::memory_order_relaxed);
+  out->max_in_flight_ms = sender->max_in_flight_ms.load(std::memory_order_relaxed);
+  out->round_trip_time_ms = sender->round_trip_time_ms.load(std::memory_order_relaxed);
 }
 
 int32_t breadcast_caststream_sender_needs_key_frame(CastStreamSender* sender) {

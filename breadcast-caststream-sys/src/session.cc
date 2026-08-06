@@ -39,6 +39,33 @@ using openscreen::cast::VideoStream;
 // audio-then-video streams collapses to just "index 0 is the video stream."
 constexpr int kVideoStreamIndex = 0;
 
+// The playout delay breadcast asks the receiver for -- the window between
+// capture here and presentation there. Deliberately *not*
+// openscreen::cast::kDefaultTargetPlayoutDelay (400ms), because that value
+// turned out to be the binding constraint on throughput, not just on latency.
+//
+// SenderImpl::GetMaxInFlightMediaDuration() computes the sender's send window
+// as clamp(2*RTT, kMinSenderInFlight, target_playout_delay/3). At a 400ms
+// target that ceiling is 133ms -- about four frames at 30 FPS. Instrumented
+// measurement against real hardware (see BreadcastEnqueueStats in facade.h)
+// found the round-trip time to a Chromecast over Wi-Fi sitting at 57-145ms,
+// i.e. 2*RTT of 114-290ms: consistently *above* that 133ms ceiling. The
+// window was therefore pinned at the ceiling and 3-40% of frames were being
+// rejected with MAX_DURATION_IN_FLIGHT every second, each one silently
+// breaking the H.264 reference chain and freezing the picture until the next
+// key frame.
+//
+// Raising this to 1200ms lifts the ceiling to 400ms, so 2*RTT lands inside
+// the clamp and the window tracks measured network conditions the way
+// openscreen intended, instead of being capped below one round trip. The cost
+// is ~800ms of additional end-to-end latency, which is unnoticeable for
+// screen mirroring to a TV and a straight trade against multi-second freezes.
+//
+// Note this is only the *sender's* half of the fix: it must stay paired with
+// the kMinSenderInFlight patch in vendor/openscreen (see PATCHES.md), which
+// raises the floor of that same clamp for the moments when RTT dips.
+constexpr std::chrono::milliseconds kTargetPlayoutDelay(1200);
+
 VideoStream BuildVideoStream(const VideoParams& params,
                              bool use_android_rtp_hack) {
   Stream stream;
@@ -47,7 +74,7 @@ VideoStream BuildVideoStream(const VideoParams& params,
   stream.channels = 1;
   stream.rtp_payload_type = GetPayloadType(VideoCodec::kH264, use_android_rtp_hack);
   stream.ssrc = GenerateSsrc(/*higher_priority=*/false);
-  stream.target_delay = openscreen::cast::kDefaultTargetPlayoutDelay;
+  stream.target_delay = kTargetPlayoutDelay;
   stream.aes_key = GenerateRandomBytes16();
   stream.aes_iv_mask = GenerateRandomBytes16();
   stream.receiver_rtcp_event_log = true;
