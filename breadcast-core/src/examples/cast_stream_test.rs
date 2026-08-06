@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use breadcast_core::caststream::{CastStreamEvent, VideoParams, WEBRTC_NAMESPACE};
+use breadcast_core::caststream::{CastStreamEvent, WEBRTC_NAMESPACE};
 use breadcast_core::net::local_lan_ip;
 use breadcast_core::pipeline::{
     build_video_pipeline_for_streaming, pull_encoded_frame, request_key_frame, set_video_bitrate_kbps,
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let capture = breadcast_core::CaptureSession::start().await?;
     println!("Got PipeWire video node id: {}", capture.video_node_id());
 
-    let (pipeline, appsink, encoder) = build_video_pipeline_for_streaming(capture.video_node_id())?;
+    let (pipeline, appsink, encoder, video_params) = build_video_pipeline_for_streaming(capture.video_node_id())?;
 
     // Watch the encode pipeline's own bus in the background -- see
     // mirror_test.rs's identical block for why this matters.
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
         &device.host,
         "sender-0",
         session.transport_id(),
-        VideoParams::default(),
+        video_params,
     )?;
     let sender = Arc::new(sender);
 

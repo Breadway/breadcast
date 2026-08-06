@@ -48,18 +48,26 @@ pub struct VideoParams {
 impl Default for VideoParams {
     fn default() -> Self {
         Self {
-            // Must match what `build_video_pipeline_for_streaming` actually
-            // encodes (`breadcast-core/src/pipeline/mod.rs`), not just what
-            // we'd like to send -- this OFFER's resolution is what the
-            // receiver allocates its decoder/output surface for. Advertising
-            // a resolution other than what's actually sent is a real
-            // protocol mismatch that plausibly explains a receiver decoder
-            // corrupting/freezing rather than just looking soft.
-            // Reverted from a brief 1920x1080 experiment -- see
-            // `build_video_pipeline_for_streaming`'s doc comment for why
-            // (the freeze wasn't a resolution/bandwidth problem at all).
-            width: 1280,
-            height: 720,
+            // NOT the value that goes on the wire. `build_video_pipeline_for_streaming`
+            // returns the geometry it will really encode, and both
+            // `breadcastd::cast_mirror` and `cast_stream_test` pass *that*
+            // to `CastStreamSender::start` -- this default only supplies the
+            // fields that don't vary with the capture path (bitrate, frame
+            // rate denominator).
+            //
+            // It has to work that way because the pipeline picks its capture
+            // backend at runtime, and the two backends differ in resolution
+            // and frame rate. This OFFER's resolution is what the receiver
+            // allocates its decoder/output surface for, so advertising
+            // anything other than what's actually sent is a real protocol
+            // mismatch -- one that plausibly explains a receiver decoder
+            // corrupting/freezing rather than just looking soft. Keeping the
+            // two in sync by hand across two files is exactly how that got
+            // out of step before; returning it from the pipeline builder
+            // makes the mismatch unrepresentable. The values below are the
+            // DMA-BUF path's, kept only as a sane standalone default.
+            width: 1920,
+            height: 1080,
             // Kept equal to `breadcastd::cast_mirror::MAX_BITRATE_KBPS *
             // 1000` -- see that constant's doc comment for why 8 Mbps
             // (this struct's previous value) isn't used here: real hardware
@@ -70,7 +78,14 @@ impl Default for VideoParams {
             // producing repeated multi-second freezes rather than just
             // softer video.
             max_bitrate_bps: 6_000_000,
-            max_frame_rate_numerator: 30,
+            // A *ceiling*, not a promise -- which is what makes it safe for
+            // the DMA-BUF path, where nothing caps the rate (`vapostproc` is
+            // a per-frame transform and can't do temporal conversion, see
+            // `build_video_pipeline_for_streaming`) and frames arrive at
+            // whatever the compositor delivers, up to this machine's 60Hz
+            // refresh. The wl_shm path does have a `videorate` capping it
+            // hard, and overrides this with the rate it actually enforces.
+            max_frame_rate_numerator: 60,
             max_frame_rate_denominator: 1,
         }
     }

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
-use breadcast_core::caststream::{CastStreamEvent, VideoParams, WEBRTC_NAMESPACE};
+use breadcast_core::caststream::{CastStreamEvent, WEBRTC_NAMESPACE};
 use breadcast_core::pipeline::{
     build_video_pipeline_for_streaming, pull_encoded_frame, request_key_frame, set_video_bitrate_kbps,
 };
@@ -87,7 +87,13 @@ impl CastMirrorSession {
         let capture = CaptureSession::start().await.context("failed to start portal screen capture")?;
         let video_node_id = capture.video_node_id();
 
-        let (pipeline, appsink, encoder) =
+        // `video_params` describes what this pipeline will *actually* encode
+        // -- it isn't a constant, because the pipeline picks its capture path
+        // at runtime (see `build_video_pipeline_for_streaming`) and the two
+        // paths differ in resolution and frame rate. It's threaded into the
+        // OFFER below rather than re-derived there, so the advertised stream
+        // and the encoded stream cannot drift apart.
+        let (pipeline, appsink, encoder, video_params) =
             build_video_pipeline_for_streaming(video_node_id).context("failed to build the encode pipeline")?;
 
         {
@@ -116,7 +122,7 @@ impl CastMirrorSession {
         .context("failed to connect and launch the Mirroring receiver")?;
 
         let (sender, stream_events) =
-            CastStreamSender::start(&device.host, "sender-0", session.transport_id(), VideoParams::default())
+            CastStreamSender::start(&device.host, "sender-0", session.transport_id(), video_params)
                 .context("failed to start the Cast Streaming session")?;
         let sender = Arc::new(sender);
 

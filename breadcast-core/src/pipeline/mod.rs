@@ -1,4 +1,6 @@
+use std::io::{Read as _, Write as _};
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -7,6 +9,8 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
+
+use crate::caststream::VideoParams;
 
 /// Builds (but doesn't start) the capture → encode → mux → HLS pipeline for
 /// a single video source. `output_dir` is created if it doesn't exist;
@@ -145,31 +149,243 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
 /// `CastStreamSender::estimated_bandwidth_bps()` — see
 /// [`request_key_frame`]/`set_video_bitrate_kbps` for the two knobs a
 /// congestion-control loop needs).
+/// Which capture-side memory path [`build_video_pipeline_for_streaming`] asks
+/// PipeWire (and through it, the compositor's portal implementation) to hand
+/// this pipeline. The two are not interchangeable: they have *different*
+/// known failure modes on different compositor versions, which is why the
+/// choice is made at runtime rather than baked into one pipeline string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureBackend {
+    /// Zero-copy: `pipewiresrc` hands DMA-BUFs straight to `vapostproc`,
+    /// which hands VA-memory straight to `vah264enc`. Nothing ever touches
+    /// system memory, and the portal never falls back to `wl_shm`.
+    Dmabuf,
+    /// `videoconvert ! videoscale ! videorate` on plain system memory, which
+    /// makes PipeWire request `wl_shm` buffers from the portal. CPU-costly
+    /// and stall-prone (see [`choose_capture_backend`]), but it does not go
+    /// anywhere near a compositor's DMA-BUF render-into-client-buffer path.
+    Shm,
+}
+
+/// First Hyprland release containing `renderer/rbo: avoid nullptr deref`
+/// (upstream commit `ae1690c2`, PR #15167, 2026-06-18), tagged in v0.56.0 on
+/// 2026-07-20.
+///
+/// Below this, asking Hyprland for a DMA-BUF screencast can **kill the
+/// user's entire compositor session**, and there is nothing this pipeline
+/// can do about it from the client side. The mechanism, confirmed against a
+/// real coredump on v0.55.4 plus upstream's own source:
+/// `Screenshare::CScreenshareFrame::copyDmabuf()` renders the monitor into
+/// the client-supplied DMA-BUF via `IHyprRenderer::beginRender` ->
+/// `getOrCreateRenderbuffer`. If `CGLRenderbuffer`'s constructor fails to
+/// import the buffer (`createEGLImage` returns `EGL_NO_IMAGE_KHR`) it
+/// early-returns leaving `m_framebuffer` null -- and v0.55.4's destructor
+/// then unconditionally does `unbind(); m_framebuffer->release();` on that
+/// null pointer while the failed renderbuffer is being torn down. The
+/// resulting abort takes down Hyprland, every window, and (separately,
+/// same instant) `xdg-desktop-portal-hyprland`. Upstream's fix is a one-line
+/// `if (m_framebuffer)` guard; it converts the abort into a dropped frame.
+///
+/// Reported upstream at least three times (hyprwm/Hyprland #13487, #13543,
+/// #13653, all v0.54.x, all on AMD) and auto-closed unread by the
+/// issues-are-disabled bot rather than triaged, so the "is it fixed?"
+/// question can only be answered from the commit log, not the tracker. The
+/// reported triggers (window-group tab switching, touchpad gestures, an
+/// emulator in a Discord stream) have nothing in common with each other or
+/// with resolution -- treat the import failure as intermittent, not as
+/// something a particular capture geometry or DRM modifier provokes.
+///
+/// Note in particular that this is *not* avoidable by requesting a
+/// "simpler" buffer layout. `vapostproc` advertises exactly one AMD DRM
+/// modifier on its `video/x-raw(memory:DMABuf)` pads -- `0x0200000008401b04`
+/// = GFX11, 64K_R_X tiling, `DCC=0` (verified with `gst-inspect-1.0
+/// vapostproc` and `drm_fourcc.h`'s field shifts). It offers no LINEAR
+/// alternative, and the one modifier it does offer is already uncompressed,
+/// so there is no tiling/compression hazard left to negotiate away.
+const HYPRLAND_MIN_SAFE_DMABUF: (u32, u32, u32) = (0, 56, 0);
+
+/// Reads the running Hyprland's version over its own IPC socket (the same
+/// `j/version` request `hyprctl version -j` makes) without spawning
+/// `hyprctl`, which needn't be installed. `None` if this isn't a Hyprland
+/// session at all, or if the version can't be determined.
+fn hyprland_version() -> Option<(u32, u32, u32)> {
+    let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok()?;
+
+    let mut socket = UnixStream::connect(format!("{runtime_dir}/hypr/{signature}/.socket.sock")).ok()?;
+    // Bounded on both halves: this runs on the way into starting a mirror
+    // session, and a wedged compositor must not be able to hang that.
+    socket.set_write_timeout(Some(Duration::from_secs(1))).ok()?;
+    socket.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
+    socket.write_all(b"j/version").ok()?;
+
+    let mut response = String::new();
+    socket.read_to_string(&mut response).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&response).ok()?;
+
+    // `version` is the plain "0.55.4"; `tag` is "v0.55.4" and is what older
+    // Hyprlands report, so accept either.
+    let raw = parsed.get("version").or_else(|| parsed.get("tag"))?.as_str()?;
+    parse_hyprland_version(raw)
+}
+
+/// Splits a Hyprland version string into comparable components. Strips a
+/// leading `v` (`tag` carries one, `version` doesn't) and anything from the
+/// first `-` (a git build's tag looks like `v0.55.4-123-gdeadbee`).
+fn parse_hyprland_version(raw: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = raw.trim().trim_start_matches('v').split('-').next()?.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    // A two-component "0.56" is treated as 0.56.0 rather than rejected --
+    // erring toward *parsing* here is safe, since the comparison against
+    // `HYPRLAND_MIN_SAFE_DMABUF` is what decides anything.
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// Picks the capture path, trading two *different* real bugs off against
+/// each other rather than pretending either one is hypothetical.
+///
+/// [`CaptureBackend::Dmabuf`] is the better path and the default: it is
+/// genuinely zero-copy, and it sidesteps `xdg-desktop-portal-hyprland`'s
+/// `wl_shm` stall entirely. That stall is not a hiccup -- it is terminal.
+/// In xdpw's `src/portals/Screencopy.cpp`, when the PipeWire consumer is
+/// holding every buffer, the portal logs "Out of buffers" and re-queues a
+/// frame only while `copyRetries++ < MAX_RETRIES` (10); `copyRetries` is
+/// reset to 0 *only* on a successful copy. So ten consecutive misses and
+/// the portal stops requesting frames forever, without sending an error to
+/// PipeWire -- which is exactly why a 45-second freeze showed up in
+/// `journalctl` and nowhere on this pipeline's own GStreamer bus. (Worth
+/// keeping in mind that "the consumer is holding every buffer" means the
+/// stall can *originate* downstream: a brief encoder or RTP-send stall stops
+/// buffers being recycled, and the portal's give-up logic then makes it
+/// permanent. [`pull_encoded_frame`]'s watchdog is the backstop for both.)
+///
+/// But on Hyprland older than [`HYPRLAND_MIN_SAFE_DMABUF`] the DMA-BUF path
+/// can abort the compositor outright, which is a categorically worse outcome
+/// than a stalled cast -- so there, fall back to `wl_shm` and let the
+/// watchdog bound the damage. Non-Hyprland sessions are unaffected by that
+/// bug and keep DMA-BUF.
+fn choose_capture_backend() -> CaptureBackend {
+    let Some(version) = hyprland_version() else {
+        // Either not Hyprland (so the Hyprland-specific crash can't apply),
+        // or Hyprland with an unreadable version. The latter is the
+        // ambiguous case; prefer the path that cannot take the desktop down.
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+            tracing::warn!(
+                "running under Hyprland but could not read its version; using the slower wl_shm \
+                 capture path, since DMA-BUF screencast aborts the compositor before v{}.{}.{}",
+                HYPRLAND_MIN_SAFE_DMABUF.0,
+                HYPRLAND_MIN_SAFE_DMABUF.1,
+                HYPRLAND_MIN_SAFE_DMABUF.2,
+            );
+            return CaptureBackend::Shm;
+        }
+        return CaptureBackend::Dmabuf;
+    };
+
+    if version < HYPRLAND_MIN_SAFE_DMABUF {
+        tracing::warn!(
+            hyprland = format!("{}.{}.{}", version.0, version.1, version.2),
+            "this Hyprland predates the fix for the DMA-BUF screencast compositor crash \
+             (upstream PR #15167, released in v0.56.0) -- falling back to the slower, \
+             stall-prone wl_shm capture path. Updating Hyprland restores zero-copy capture."
+        );
+        return CaptureBackend::Shm;
+    }
+
+    CaptureBackend::Dmabuf
+}
+
 pub fn build_video_pipeline_for_streaming(
     video_node_id: u32,
-) -> Result<(gst::Pipeline, gst_app::AppSink, gst::Element)> {
+) -> Result<(gst::Pipeline, gst_app::AppSink, gst::Element, VideoParams)> {
     gst::init().context("failed to initialize GStreamer")?;
 
-    // 1280x720@30 Main profile. Briefly raised to 1080p, then reverted here:
-    // a near-instant freeze *on a faster network* turned out to have nothing
-    // to do with resolution or bandwidth at all -- see `frame_chain_broken`
-    // in `breadcast-caststream-sys/src/facade.cc` for the actual bug (the
-    // FFI silently drops frames under openscreen's in-flight budget and lets
-    // the encoder's reference chain corrupt as a result). 1080p roughly
-    // tripled the per-frame packet count, which made that bug's real trigger
-    // -- exceeding the in-flight window -- worse, not the resolution itself.
-    // Reverted alongside fixing that bug rather than keeping both variables
-    // in motion at once; revisit once `frame_chain_broken` on its own is
-    // confirmed to have fixed the freeze at 720p.
-    let pipeline_str = "pipewiresrc path=%VIDEO_NODE_ID% do-timestamp=true ! \
-         videoconvert ! videoscale ! videorate ! \
-         video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! \
-         vah264enc name=venc bitrate=4000 key-int-max=60 rate-control=cbr ! \
-         video/x-h264,profile=main ! \
-         h264parse name=h264parse config-interval=-1 ! \
-         video/x-h264,stream-format=byte-stream,alignment=au ! \
-         appsink name=appsink emit-signals=false sync=false max-buffers=4 drop=true"
-        .replace("%VIDEO_NODE_ID%", &video_node_id.to_string());
+    // 1920x1080@native-rate Main profile. Went 1080p -> 720p -> 1080p again
+    // tonight: the first 1080p attempt froze near-instantly, but that had
+    // nothing to do with resolution -- it was the `xdg-desktop-portal-hyprland`
+    // wl_shm buffer-exhaustion bug below (real, structural, whatever the
+    // resolution) compounded by openscreen's in-flight RTP budget being too
+    // tight for this receiver's actual RTT (see `frame_chain_broken` in
+    // `breadcast-caststream-sys/src/facade.cc`, and the playout-delay tuning
+    // in `breadcast-caststream-sys/src/session.cc`). With both of those
+    // fixed -- confirmed via a real, freeze-free 720p session -- the
+    // packet-count increase 1080p brings back is no longer landing on an
+    // already-struggling budget, so it's worth trying again on its own
+    // merits.
+    //
+    // On the DMA-BUF path `pipewiresrc` deliberately does *not* go through
+    // `videoconvert ! videoscale ! videorate ! video/x-raw,...` (plain
+    // system-memory caps) -- doing so forces PipeWire to hand the
+    // compositor's portal implementation a `wl_shm` (shared-memory) buffer
+    // request, and on this system (`xdg-desktop-portal-hyprland`) that path
+    // is real-world buggy: journalctl during a live freeze showed it
+    // repeatedly logging "Asked for a wl_shm buffer which is legacy" / "Out
+    // of buffers" / "Retrying screencopy" in a tight loop that never
+    // actually delivered a frame -- multi-second (once 45+ second) stalls
+    // with *zero* signal on breadcast's own GStreamer bus, since nothing
+    // here was erroring, it was just starved waiting on a buffer the
+    // portal's legacy path never produced. See `choose_capture_backend` for
+    // why that stall is permanent rather than transient, and for the one
+    // case where it's still the lesser evil.
+    //
+    // `vapostproc` (VA-API postprocessor -- confirmed present via
+    // `gst-inspect-1.0 vapostproc`, ships in `gst-plugins-bad`'s `va`
+    // plugin) accepts `video/x-raw(memory:DMABuf)` directly from
+    // `pipewiresrc` and outputs `video/x-raw(memory:VAMemory)`, which
+    // `vah264enc` also accepts natively -- a fully zero-copy DMA-BUF path
+    // from portal to hardware encoder that never touches the legacy wl_shm
+    // fallback at all. No `videorate` in this path: `vapostproc` is a
+    // per-frame transform (scale/convert), not a temporal one, so it can't
+    // do frame-rate reduction the way `videorate` does on raw memory --
+    // frames flow at whatever rate PipeWire actually delivers rather than a
+    // forced 30fps. This is fine for RTP: `facade.cc` derives RTP timestamps
+    // from each frame's real capture time regardless of the nominal rate,
+    // and openscreen's own frame pacing doesn't assume a fixed source rate
+    // either. The returned `VideoParams` advertises 60 as a *ceiling*
+    // (`max_frame_rate_*`), which stays truthful whether the compositor
+    // actually delivers 60 or fewer; the wl_shm path's `videorate` does cap
+    // hard, so it advertises the rate it really enforces.
+    //
+    // Both branches return the geometry they actually encode, and the caller
+    // hands that straight to the Cast OFFER. That coupling is deliberate:
+    // advertising a resolution other than what's really sent is a genuine
+    // protocol mismatch this project has already been bitten by once, and
+    // keeping two constants manually in sync across two files is how that
+    // happened. Returning it makes the mismatch unrepresentable.
+    let (pipeline_str, params) = match choose_capture_backend() {
+        CaptureBackend::Dmabuf => (
+            "pipewiresrc path=%VIDEO_NODE_ID% do-timestamp=true ! \
+             video/x-raw(memory:DMABuf),format=DMA_DRM ! \
+             vapostproc ! \
+             video/x-raw(memory:VAMemory),format=NV12,width=1920,height=1080 ! \
+             vah264enc name=venc bitrate=4000 key-int-max=60 rate-control=cbr ! \
+             video/x-h264,profile=main ! \
+             h264parse name=h264parse config-interval=-1 ! \
+             video/x-h264,stream-format=byte-stream,alignment=au ! \
+             appsink name=appsink emit-signals=false sync=false max-buffers=4 drop=true",
+            VideoParams { width: 1920, height: 1080, max_frame_rate_numerator: 60, ..VideoParams::default() },
+        ),
+        // 720p30 rather than 1080p60 on this path on purpose: every frame is
+        // a CPU convert + scale here, and CPU cost is precisely what makes
+        // the portal's "Out of buffers" give-up more likely, since the
+        // portal runs out exactly when the consumer is slow to recycle
+        // buffers. The lighter shape is also what was last known to work on
+        // real hardware before the DMA-BUF switch.
+        CaptureBackend::Shm => (
+            "pipewiresrc path=%VIDEO_NODE_ID% do-timestamp=true ! \
+             videoconvert ! videoscale ! videorate ! \
+             video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! \
+             vah264enc name=venc bitrate=4000 key-int-max=60 rate-control=cbr ! \
+             video/x-h264,profile=main ! \
+             h264parse name=h264parse config-interval=-1 ! \
+             video/x-h264,stream-format=byte-stream,alignment=au ! \
+             appsink name=appsink emit-signals=false sync=false max-buffers=4 drop=true",
+            VideoParams { width: 1280, height: 720, max_frame_rate_numerator: 30, ..VideoParams::default() },
+        ),
+    };
+    let pipeline_str = pipeline_str.replace("%VIDEO_NODE_ID%", &video_node_id.to_string());
 
     let element = gst::parse::launch(&pipeline_str).context("failed to parse GStreamer pipeline")?;
     let Ok(pipeline) = element.downcast::<gst::Pipeline>() else {
@@ -184,12 +400,41 @@ pub fn build_video_pipeline_for_streaming(
 
     let encoder = pipeline.by_name("venc").context("parsed pipeline has no element named 'venc'")?;
 
-    Ok((pipeline, appsink, encoder))
+    Ok((pipeline, appsink, encoder, params))
 }
+
+/// How long [`pull_encoded_frame`] waits per `try_pull_sample` call. Short
+/// enough that a teardown from another thread is noticed promptly, long
+/// enough not to spin.
+const CAPTURE_STALL_POLL: Duration = Duration::from_millis(250);
+
+/// How long [`pull_encoded_frame`] tolerates a *playing* pipeline producing
+/// no frames at all before declaring the capture dead.
+///
+/// This exists because the failure it catches is otherwise completely
+/// silent. `xdg-desktop-portal-hyprland` stops requesting frames after ten
+/// consecutive "Out of buffers" misses and never sends an error to PipeWire
+/// (see [`choose_capture_backend`]); a compositor that fails to import a
+/// capture buffer likewise just drops the frame. In both cases GStreamer has
+/// nothing to report -- no bus error, no EOS, no flow-return failure -- so
+/// without a timeout here the frame pump blocks in `pull_sample` forever and
+/// the mirror session appears frozen with nothing anywhere saying why. That
+/// is precisely the 45-second freeze that took a `journalctl` dig to
+/// explain.
+///
+/// Bailing propagates out of `breadcastd`'s frame-pump thread, which already
+/// reports `DaemonCommand::SessionEnded` on exit, so the session tears down
+/// and the failure surfaces as a real event instead of a hang. Generous
+/// enough (10s) that a merely slow moment -- a heavy compositor frame, a
+/// bitrate renegotiation -- doesn't trip it; anything longer than this is
+/// not a hiccup, since neither of the known failure modes recovers.
+const CAPTURE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Pulls one complete Annex-B H.264 access unit from `appsink`, blocking
 /// until one is available. Returns `None` once the pipeline reaches EOS or
-/// the sink otherwise stops (e.g. pipeline torn down from another thread).
+/// the sink otherwise stops (e.g. pipeline torn down from another thread),
+/// and errors if the pipeline is still playing but has gone
+/// [`CAPTURE_STALL_TIMEOUT`] without producing a frame.
 ///
 /// A buffer with no PTS is skipped (this pulls the next one instead) rather
 /// than reported with a substituted timestamp, as an earlier version did
@@ -203,12 +448,38 @@ pub fn build_video_pipeline_for_streaming(
 /// redundant, since `enqueue_frame` is a public FFI entry point that has to
 /// hold up against any caller.
 pub fn pull_encoded_frame(appsink: &gst_app::AppSink) -> Result<Option<(Vec<u8>, bool, i64)>> {
+    let poll = gst::ClockTime::from_mseconds(CAPTURE_STALL_POLL.as_millis() as u64);
+    let mut stalled_for = Duration::ZERO;
     loop {
-        let sample = match appsink.pull_sample() {
-            Ok(sample) => sample,
-            Err(_) if appsink.is_eos() => return Ok(None),
-            Err(e) => bail!("appsink pull_sample failed: {e}"),
+        let Some(sample) = appsink.try_pull_sample(Some(poll)) else {
+            // EOS is the ordinary end: the user hit "Stop sharing" in the
+            // portal, or the source went away.
+            if appsink.is_eos() {
+                return Ok(None);
+            }
+            // Teardown from another thread (`CastMirrorSession::stop` sets
+            // the pipeline to Null) makes the sink flush, and a flushing
+            // sink returns `None` *immediately* rather than after the
+            // timeout. Treat that as a clean end too -- otherwise this would
+            // busy-spin for the whole stall budget and then report a
+            // spurious "capture stalled" on every normal stop.
+            if !matches!(appsink.current_state(), gst::State::Playing | gst::State::Paused) {
+                return Ok(None);
+            }
+
+            stalled_for += CAPTURE_STALL_POLL;
+            if stalled_for < CAPTURE_STALL_TIMEOUT {
+                continue;
+            }
+            bail!(
+                "capture stalled: no encoded frame for {}s while the pipeline was still \
+                 playing (no GStreamer error, no EOS). This is the shape of a portal-side \
+                 give-up -- see `choose_capture_backend` -- rather than a pipeline fault, \
+                 and it will not recover on its own",
+                CAPTURE_STALL_TIMEOUT.as_secs()
+            );
         };
+        stalled_for = Duration::ZERO;
         let buffer = sample.buffer().context("pulled sample had no buffer")?;
         let Some(capture_time_us) = buffer.pts().map(|t| t.useconds() as i64) else {
             tracing::debug!("skipped an encoded frame with no PTS");
@@ -350,5 +621,35 @@ pub async fn wait_for_playlist_segments(playlist_path: &Path, min_segments: usiz
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_both_shapes_hyprland_reports() {
+        // `version` (plain) and `tag` (v-prefixed) from the same running
+        // compositor, plus the `-N-gSHA` suffix a git build's tag carries.
+        assert_eq!(parse_hyprland_version("0.55.4"), Some((0, 55, 4)));
+        assert_eq!(parse_hyprland_version("v0.55.4"), Some((0, 55, 4)));
+        assert_eq!(parse_hyprland_version("v0.56.0-123-gdeadbee"), Some((0, 56, 0)));
+        assert_eq!(parse_hyprland_version("0.56"), Some((0, 56, 0)));
+        assert_eq!(parse_hyprland_version(" v0.56.2\n"), Some((0, 56, 2)));
+
+        assert_eq!(parse_hyprland_version(""), None);
+        assert_eq!(parse_hyprland_version("unknown"), None);
+    }
+
+    #[test]
+    fn straddles_the_dmabuf_crash_fix_correctly() {
+        // The whole point of the constant: v0.55.4 aborts the compositor on
+        // a DMA-BUF screencast, v0.56.0 is the first release with the fix.
+        assert!(parse_hyprland_version("0.55.4").unwrap() < HYPRLAND_MIN_SAFE_DMABUF);
+        assert!(parse_hyprland_version("0.55.99").unwrap() < HYPRLAND_MIN_SAFE_DMABUF);
+        assert!(parse_hyprland_version("0.56.0").unwrap() >= HYPRLAND_MIN_SAFE_DMABUF);
+        assert!(parse_hyprland_version("0.56.1").unwrap() >= HYPRLAND_MIN_SAFE_DMABUF);
+        assert!(parse_hyprland_version("1.0.0").unwrap() >= HYPRLAND_MIN_SAFE_DMABUF);
     }
 }
