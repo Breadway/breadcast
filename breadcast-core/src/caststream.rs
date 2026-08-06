@@ -52,12 +52,22 @@ impl Default for VideoParams {
             // encodes (`breadcast-core/src/pipeline/mod.rs`), not just what
             // we'd like to send -- this OFFER's resolution is what the
             // receiver allocates its decoder/output surface for. Advertising
-            // 1920x1080 while actually sending 1280x720 frames is a real
+            // a resolution other than what's actually sent is a real
             // protocol mismatch that plausibly explains a receiver decoder
             // corrupting/freezing rather than just looking soft.
-            width: 1280,
-            height: 720,
-            max_bitrate_bps: 8_000_000,
+            width: 1920,
+            height: 1080,
+            // Kept equal to `breadcastd::cast_mirror::MAX_BITRATE_KBPS *
+            // 1000` -- see that constant's doc comment for why 8 Mbps
+            // (this struct's previous value) isn't used here even though
+            // 1080p can look better with more headroom: real hardware
+            // testing showed the AIMD probe pinning to whatever this
+            // ceiling is for the entire session once the estimator reports
+            // (unreliably) that there's room, and 8 Mbps sustained was more
+            // than the previous network+receiver could actually hold,
+            // producing repeated multi-second freezes rather than just
+            // softer video.
+            max_bitrate_bps: 6_000_000,
             max_frame_rate_numerator: 30,
             max_frame_rate_denominator: 1,
         }

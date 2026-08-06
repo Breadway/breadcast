@@ -150,12 +150,19 @@ pub fn build_video_pipeline_for_streaming(
 ) -> Result<(gst::Pipeline, gst_app::AppSink, gst::Element)> {
     gst::init().context("failed to initialize GStreamer")?;
 
-    // Same 1280x720@30 Main-profile baseline as build_video_pipeline, for
-    // the same reason (see its doc comment) -- broad decoder compatibility
-    // first, revisit upward once a specific device's real ceiling is known.
+    // 1920x1080@30 Main profile -- raised from the earlier 1280x720
+    // baseline (kept in `build_video_pipeline`'s HLS path, which targets a
+    // different, less capable receiver -- see its doc comment) once real
+    // hardware testing showed the actual bottleneck on the *previous*
+    // network wasn't resolution but the encoder being driven well past
+    // what that link/receiver could sustain (see `MAX_BITRATE_KBPS` in
+    // `breadcastd::cast_mirror`). Must stay equal to `VideoParams::default`
+    // in `caststream.rs` -- the OFFER's advertised resolution and what's
+    // actually encoded disagreeing is a protocol-level mismatch, not just
+    // soft video (see that struct's doc comment for what that caused).
     let pipeline_str = "pipewiresrc path=%VIDEO_NODE_ID% do-timestamp=true ! \
          videoconvert ! videoscale ! videorate ! \
-         video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! \
+         video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! \
          vah264enc name=venc bitrate=4000 key-int-max=60 rate-control=cbr ! \
          video/x-h264,profile=main ! \
          h264parse name=h264parse config-interval=-1 ! \

@@ -29,14 +29,23 @@ use crate::daemon::DaemonCommand;
 /// `vah264enc` with, since [`bitrate_control_step`] treats it as the value
 /// already in effect at t=0.
 const INITIAL_BITRATE_KBPS: u32 = 4000;
-/// Never encode below this. 720p30 below roughly 1 Mbps is a wall of
+/// Never encode below this. 1080p30 below roughly 1.5 Mbps is a wall of
 /// blocking artifacts -- if the link genuinely can't carry that, dropping
 /// frames is a better failure mode than shipping unwatchable video.
-const MIN_BITRATE_KBPS: u32 = 1000;
+const MIN_BITRATE_KBPS: u32 = 1500;
 /// Never encode above this, regardless of how much headroom the estimator
 /// reports. Matches `VideoParams::default().max_bitrate_bps`, i.e. what the
-/// OFFER told the receiver to expect.
-const MAX_BITRATE_KBPS: u32 = 8000;
+/// OFFER told the receiver to expect -- see that constant's doc comment for
+/// why this is 6 Mbps and not higher: real hardware testing showed the AIMD
+/// probe below pinning to whatever this ceiling is for the *entire* session
+/// (the estimator it trusts read a suspiciously flat ~20 Mbps almost the
+/// whole time), and 8 Mbps sustained was more than the previous
+/// network+receiver could actually hold without repeated multi-second
+/// freezes. 6 Mbps is a solid target for 1080p30 on its own merits, not
+/// just a defensive number -- revisit upward only with real evidence this
+/// specific link+receiver can sustain more, not just because the estimator
+/// claims there's headroom.
+const MAX_BITRATE_KBPS: u32 = 6000;
 
 pub struct CastMirrorSession {
     pipeline: gst::Pipeline,
