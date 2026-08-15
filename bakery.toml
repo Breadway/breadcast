@@ -22,6 +22,8 @@ system_deps = [
     "openssl",
 ]
 optional_system_deps = ["hyprland", "xdg-desktop-portal-hyprland"]
+# breadd is optional: breadcastd publishes bread.cast.* when it is running
+# and works the same without it. See EVENTS.md. Not a bakery bread dep.
 bread_deps = []
 
 [[service]]

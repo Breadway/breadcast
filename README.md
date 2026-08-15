@@ -1,75 +1,88 @@
 # breadcast
 
-Cast your screen to any Chromecast/Google TV, for Hyprland. It consists of
-two binaries:
+Cast your screen to a Chromecast, Google TV, or DLNA renderer on the LAN.
+Two binaries:
 
-- **`breadcastd`** — a background daemon that discovers Cast devices on the
-  LAN and (once built — see Status) owns the screen-capture/encode/serve
-  pipeline and the live Cast V2 session.
-- **`breadcast`** — a GTK4 Layer Shell popup for picking a device and
-  starting/stopping a cast.
+- **`breadcastd`** — background daemon. Discovers Cast (mDNS) and DLNA/UPnP
+  (SSDP) devices, owns the portal screen-capture / encode pipeline, and
+  runs the live session: Cast Streaming (vendored openscreen) or
+  DLNA/AVTransport. One active session at a time.
+- **`breadcast`** — GTK4 Layer Shell popup. Thin IPC client of
+  `breadcastd`: pick a device, start or stop a cast. Closing the popup
+  does not interrupt an active session.
 
-## Status
+This is a **bakery product**. It is **not** shipped on the BOS ISO and is
+**not** part of the default desktop — install it yourself if you want it.
 
-This is early: device discovery (mDNS) and the Cast V2 sender (real device
-control — connect, launch the receiver, load media) are built and validated
-against real Chromecast/Google TV hardware. The actual screen-mirroring
-pipeline (portal-based screen capture → GPU-accelerated encode → HLS →
-local HTTP server) and the GTK4 device-picker UI are not built yet.
-`breadcastd` today only does discovery and optional breadd event
-publishing; `breadcast` is a stub binary. See `CLAUDE.md`'s Status section
-for more detail.
+## Install
+
+```sh
+bakery install breadcast
+```
+
+That puts `breadcast` and `breadcastd` on `$PATH` (usually `~/.local/bin`),
+installs `contrib/breadcastd.service` as a systemd user unit, enables it,
+and starts the daemon. `bakery doctor breadcast` checks the system
+packages listed in `bakery.toml` first.
 
 ## Requirements
 
-- Rust toolchain (edition 2021)
-- GTK 4.12+ and `gtk4-layer-shell` (once the UI lands)
-- GStreamer + `gst-plugin-pipewire`, `gst-plugins-bad` (VA-API `va` plugin),
-  `gst-plugin-hlssink3` (once the capture pipeline lands)
-- Hyprland (or any Wayland compositor with Layer Shell and the
-  `xdg-desktop-portal` ScreenCast interface)
+- A Wayland compositor with Layer Shell and `xdg-desktop-portal`
+  ScreenCast (Hyprland is the primary target)
+- GTK 4.12+ and `gtk4-layer-shell`
+- GStreamer plus `gst-plugin-pipewire`, `gst-plugins-bad`,
+  `gst-plugin-va` (`vah264enc`), and `gst-plugin-hlssink3`
+- `jsoncpp` and `openssl` (runtime deps of the vendored Cast Streaming
+  code)
 
-## Build
+From source you also need a Rust toolchain (edition 2021).
+
+## Build from source
 
 ```sh
-git clone https://git.breadway.dev/breadway/breadcast
+git clone https://git.breadway.dev/Breadway/breadcast
 cd breadcast
 cargo build --release
 ```
 
-The compiled binaries are at `target/release/breadcast` and
-`target/release/breadcastd`.
-
-## Try device discovery today
-
-```sh
-cargo run -p breadcast-core --example discover
-```
-
-Prints Chromecast/Google TV devices as they appear/disappear on the LAN.
-
-## Install
-
-Copy the binaries to somewhere on your `$PATH`, e.g.:
+Binaries land at `target/release/breadcast` and `target/release/breadcastd`.
 
 ```sh
 cp target/release/breadcast target/release/breadcastd ~/.local/bin/
-```
-
-### systemd user service
-
-A unit file is provided in `contrib/`:
-
-```sh
 cp contrib/breadcastd.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now breadcastd
 ```
 
+## Usage
+
+Start the daemon (or let the systemd unit handle it):
+
+```sh
+breadcastd
+```
+
+Open the device picker:
+
+```sh
+breadcast
+```
+
+Running `breadcast` again while it is open closes it (toggle). Click a
+device to start mirroring — the portal picker asks which screen to share.
+**Stop mirroring** ends the session. Status is Idle or Casting.
+
+Discovery examples (optional, for debugging the LAN):
+
+```sh
+cargo run -p breadcast-core --example discover
+cargo run -p breadcast-core --example dlna_discover
+```
+
 ### Hyprland keybind
 
-For stock Hyprland, add the contents of `contrib/hyprland.conf` to your
-`hyprland.conf`:
+On stock Hyprland, add the contents of `contrib/hyprland.conf` to your
+`hyprland.conf` if you want Super+C and the frosted-glass blur:
 
 ```
 layerrule = blur, breadcast
@@ -78,20 +91,16 @@ layerrule = ignorezero, breadcast
 bind = $mainMod, C, exec, breadcast
 ```
 
-On BOS, Hyprland config is Lua+JSON-driven instead — see
-`contrib/binds.json` for the equivalent keybind entry to merge into your
-`binds.json` by hand (there's no per-app self-registration mechanism yet).
-There is currently no BOS-native equivalent for the `layerrule` blur lines.
+BOS does not ship this app or a default keybind for it. Add one yourself
+if you install breadcast on a BOS machine.
 
 ## bread event integration
 
-`breadcastd` optionally publishes into the shared bread automation fabric
-(`bread.cast.*`) when `breadd` is running, and works identically without
-it. See `EVENTS.md` for the full, honest-about-scope contract — most of the
-eventually-planned events (mirroring start/stop) aren't implemented yet,
-since the mirroring pipeline itself isn't built yet.
+`breadcastd` works the same with or without `breadd`. When `breadd` is
+running, it publishes `bread.cast.*` and honors `bread.command.cast.*`.
+See [EVENTS.md](EVENTS.md) for the bus contract. `bread` is not a bakery
+dependency.
 
 ## Theming
 
-`breadcast` will inherit its colour palette from `bread-theme`, matching
-the rest of the ecosystem, once its GTK4 UI is built.
+`breadcast` inherits its colour palette from `bread-theme`.
