@@ -1,0 +1,50 @@
+# AGENTS.md — Repo hygiene
+
+Scope: this file covers *repo hygiene* — branching, remotes, CI, cleanup. It is not project documentation.
+
+This repo follows the branch/release workflow documented in `CONTRIBUTING.md`
+— read and follow it for any git, branch, or release work here (the
+single-trunk model, `feature/x`/`fix/x` branch naming, how RC tags work,
+etc). Don't improvise a different workflow. The short version: there is one
+long-lived branch, `main` — no `dev` or `beta` branch should be used.
+`main` is supposed to auto-publish a dev-track build on every push. "Beta"
+and "stable" are both just tags, not branches: push a `vX.Y.Z-rc.N` tag to
+publish a beta-track build, push a plain `vX.Y.Z` tag to cut the signed
+stable release. "Freezing" for stabilization means pausing pushes to
+`main`, not moving a branch. This replaced an earlier three-branch
+(`dev`/`beta`/`main`) model after `main` was found to have silently rotted
+out of sync with `dev`/`beta` across most repos in this ecosystem.
+
+## Remotes
+- `origin` — Forgejo (`git.breadway.dev` via Hestia, SSH) — authoritative.
+- `github` — GitHub mirror. Push both when publishing.
+
+## CI
+- `release.yml` triggers on `push: tags: ['v*']` — tag a release to cut
+  the signed stable build.
+- Leftover: `dev-release.yml` still triggers on `push: branches: ['dev']`
+  and `beta-release.yml` still triggers on `push: branches: ['beta']`.
+  Those files are leftover from the three-branch model. Do **not** rewrite
+  them unless you are deliberately migrating CI; document and follow
+  single-trunk `main` + RC tags instead.
+- `check.yml` runs clippy + test on `feature/**` and `fix/**`.
+- No separate lint/PR-check pipeline on ordinary commits to `main`.
+
+## Product cut
+breadcast is a **bakery product**, not shipped on the BOS ISO, and not part
+of the default desktop. Do not add BOS skel/keybinds. `bread` (breadd) is
+optional event integration — see `EVENTS.md` — not a bakery `bread_deps`
+entry.
+
+## Status
+The daemon + GTK picker + Cast Streaming / DLNA pipelines are built and
+validated against real hardware. `EVENTS.md` is the bus contract.
+
+## Pins
+`bread-theme` and `bread-utils` pin
+`git.breadway.dev/Breadway/bread-ecosystem` tag `v0.7.1`. Do not switch
+those to github.com or `branch = "main"`.
+
+## Don't
+- Don't embed credentials in remote URLs — SSH or a credential helper only.
+- Don't claim breadcast is on the BOS ISO or the default desktop.
