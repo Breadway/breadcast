@@ -6,7 +6,7 @@ name: dev release
 # this is part of.
 on:
   push:
-    branches: ['dev']
+    branches: ['main', 'dev']
 
 jobs:
   build:
