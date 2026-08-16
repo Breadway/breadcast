@@ -1,11 +1,11 @@
 name: beta release
 
-# Publishes a beta-track build on every push to `beta` — a frozen
-# stabilization branch cut from `dev` when ready to stabilize; only
-# fix/<issue> branches merged into `beta` should land here afterward.
-# See bread-ecosystem's docs/release-channels.md for the three-track policy.
+# Publishes a beta-track build from a `vX.Y.Z-rc.N` tag. The leftover
+# `beta` branch trigger is kept so an old branch push does not go silent;
+# do not use that branch — cut beta from an RC tag. See CONTRIBUTING.md.
 on:
   push:
+    tags: ['v*-rc.*']
     branches: ['beta']
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf src && mkdir src
-          git clone --branch beta --depth 1 \
+          git clone --branch "${GITHUB_REF_NAME}" --depth 1 \
             "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" src
 
       - name: build
@@ -25,19 +25,21 @@ jobs:
       - name: compute beta version
         run: |
           set -euo pipefail
+          # An RC tag is already valid semver and is the beta version.
+          # The leftover `beta` branch path still synthesizes one from the
+          # latest stable tag so an old push does not publish as 0.0.0.
+          if [[ "${GITHUB_REF_NAME}" == v*-rc.* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            exit 0
+          fi
           cd src
-          # Base the beta version off the latest published stable tag,
-          # not Cargo.toml — Cargo.toml can go stale relative to the last
-          # real release (seen in practice: breadbox/breadpad/breadcrumbs/
-          # breadpaper), which would make a beta build sort as OLDER than
-          # what's already installed and bakery would correctly refuse it.
           LATEST_TAG="$(git ls-remote --tags --refs \
             "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" 'v*' \
-            | awk -F/ '{print $NF}' | sed 's/^v//' | sort -V | tail -1)"
+            | awk -F/ '{print $NF}' | sed 's/^v//' | grep -v -- '-rc' | sort -V | tail -1)"
           if [ -n "${LATEST_TAG}" ]; then
             CUR="${LATEST_TAG}"
           else
-            CUR="$(grep -m1 '^version' breadcast/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
+            CUR="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
           fi
           IFS='.' read -r MA MI PA <<< "${CUR}"
           SHA="$(git rev-parse --short HEAD)"

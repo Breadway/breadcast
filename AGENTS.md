@@ -20,12 +20,12 @@ out of sync with `dev`/`beta` across most repos in this ecosystem.
 - `github` — GitHub mirror. Push both when publishing.
 
 ## CI
-- `release.yml` triggers on `push: tags: ['v*']` — tag a release to cut
-  the signed stable build.
+- `release.yml` triggers on `push: tags: ['v*']` but skips any tag whose
+  name contains `-rc` — a plain `vX.Y.Z` cuts the signed stable build.
+- `beta-release.yml` publishes a beta-track build from a `vX.Y.Z-rc.N`
+  tag (and still on leftover `beta` so an old branch push does not go silent).
 - `dev-release.yml` publishes a dev-track build on push to `main` (and
   still on leftover `dev` so an old branch push does not go silent).
-- `beta-release.yml` still triggers on leftover `push: branches: ['beta']`.
-  Do **not** use that branch; cut beta from a `vX.Y.Z-rc.N` tag instead.
 - `check.yml` runs clippy + test on `main`, `feature/**`, and `fix/**`.
 
 ## Product cut
