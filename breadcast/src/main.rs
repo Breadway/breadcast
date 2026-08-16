@@ -38,6 +38,7 @@ fn build_ui(app: &Application) {
     bread_theme::gtk::apply_app_css(|| css::build_css(&load_palette()));
 
     let window = bread_utils::gtk_popup::new_overlay_window(app, "breadcast");
+    bread_theme::gtk::bind_window_auto(&window);
 
     let panel = GBox::new(Orientation::Vertical, 8);
     panel.add_css_class("cast-panel");
