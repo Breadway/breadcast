@@ -22,13 +22,11 @@ out of sync with `dev`/`beta` across most repos in this ecosystem.
 ## CI
 - `release.yml` triggers on `push: tags: ['v*']` — tag a release to cut
   the signed stable build.
-- Leftover: `dev-release.yml` still triggers on `push: branches: ['dev']`
-  and `beta-release.yml` still triggers on `push: branches: ['beta']`.
-  Those files are leftover from the three-branch model. Do **not** rewrite
-  them unless you are deliberately migrating CI; document and follow
-  single-trunk `main` + RC tags instead.
-- `check.yml` runs clippy + test on `feature/**` and `fix/**`.
-- No separate lint/PR-check pipeline on ordinary commits to `main`.
+- `dev-release.yml` publishes a dev-track build on push to `main` (and
+  still on leftover `dev` so an old branch push does not go silent).
+- `beta-release.yml` still triggers on leftover `push: branches: ['beta']`.
+  Do **not** use that branch; cut beta from a `vX.Y.Z-rc.N` tag instead.
+- `check.yml` runs clippy + test on `main`, `feature/**`, and `fix/**`.
 
 ## Product cut
 breadcast is a **bakery product**, not shipped on the BOS ISO, and not part
@@ -41,9 +39,9 @@ The daemon + GTK picker + Cast Streaming / DLNA pipelines are built and
 validated against real hardware. `EVENTS.md` is the bus contract.
 
 ## Pins
-`bread-theme` and `bread-utils` pin
-`git.breadway.dev/Breadway/bread-ecosystem` tag `v0.7.1`. Do not switch
-those to github.com or `branch = "main"`.
+`bread-theme` pins `git.breadway.dev/Breadway/bread-ecosystem` tag
+`v0.7.4` (per-monitor palette). `bread-utils` pins the same repo at
+`v0.7.2`. Do not switch those to github.com or `branch = "main"`.
 
 ## Don't
 - Don't embed credentials in remote URLs — SSH or a credential helper only.

@@ -117,6 +117,10 @@ impl CaptureSession {
                 .open(&token_path)
             {
                 use std::io::Write;
+                use std::os::unix::fs::PermissionsExt;
+                // `mode()` only applies on create. A pre-existing
+                // world-readable token would keep its mode otherwise.
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
                 let _ = file.write_all(token.as_bytes());
             }
         }

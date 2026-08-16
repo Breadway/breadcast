@@ -29,7 +29,7 @@ const ADDRESS_STALE_AFTER: Duration = Duration::from_secs(300);
 /// to two IPv4 addresses (e.g. wired + wireless, or a DHCP lease change),
 /// an unordered choice can silently pick a stale/unreachable one, and pick
 /// a *different* one across otherwise-identical runs.
-fn pick_address(addresses: &[(ScopedIp, Instant)]) -> Option<IpAddr> {
+fn pick_address(addresses: &[(ScopedIp, Instant)]) -> Option<String> {
     let now = Instant::now();
     let mut candidates: Vec<&(ScopedIp, Instant)> = addresses
         .iter()
@@ -50,7 +50,10 @@ fn pick_address(addresses: &[(ScopedIp, Instant)]) -> Option<IpAddr> {
             })
         })
         .or_else(|| candidates.first())
-        .map(|(ip, _)| ip.to_ip_addr())
+        // Prefer ScopedIp's Display so a last-resort link-local IPv6
+        // keeps its `%iface` zone -- `IpAddr` drops it and
+        // `TcpStream::connect("fe80::…")` then fails with EINVAL.
+        .map(|(ip, _)| ip.to_string())
 }
 
 const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
@@ -140,10 +143,21 @@ impl Discovery {
                             }
                         }
 
-                        let Some(host) = pick_address(addrs).map(|ip| ip.to_string()) else {
+                        let Some(host) = pick_address(addrs) else {
                             warn!(%id, "cast device resolved with no usable addresses, skipping");
                             continue;
                         };
+                        // First ServiceResolved is often IPv6-only (or a
+                        // zoneless fe80::). rust_cast / Cast Streaming
+                        // cannot connect to that. Wait for a later
+                        // resolve that carries IPv4 or a scoped address.
+                        if host.parse::<std::net::Ipv6Addr>().is_ok()
+                            && host.starts_with("fe80:")
+                            && !host.contains('%')
+                        {
+                            warn!(%id, %host, "cast device resolved to an unscoped link-local IPv6, waiting for a better address");
+                            continue;
+                        }
 
                         fullname_to_id.insert(info.get_fullname().to_string(), id.clone());
 

@@ -225,16 +225,18 @@ impl CastStreamSender {
         }
     }
 
-    /// Enqueues one encoded video access unit (Annex-B H.264) for sending.
-    /// `capture_time_us` only needs to be monotonically increasing and
-    /// proportional to real elapsed time between frames -- it does not need
-    /// to be wall-clock-accurate.
+    /// Posts one encoded video access unit (Annex-B H.264) onto the C++
+    /// TaskRunner. `capture_time_us` only needs to be monotonically
+    /// increasing and proportional to real elapsed time between frames --
+    /// it does not need to be wall-clock-accurate.
     ///
-    /// Returns an error if the session isn't negotiated yet or the frame
-    /// was rejected under backpressure; callers should treat the latter as
-    /// a dropped frame, not a fatal condition (see
-    /// [`Self::needs_key_frame`]/[`Self::estimated_bandwidth_bps`] for how
-    /// to react).
+    /// Returns an error only if the session isn't negotiated (or is
+    /// shutting down). A `Ok(())` means the frame was *posted*, not that
+    /// `Sender::EnqueueFrame` accepted it -- accept/reject is visible via
+    /// [`Self::enqueue_stats`], and a reject that breaks the H.264
+    /// reference chain latches [`Self::needs_key_frame`]. Treating this
+    /// return as accept/reject is how an earlier version hid a frozen
+    /// picture behind a healthy "30fps enqueued" log line.
     pub fn enqueue_frame(&self, data: &[u8], is_key_frame: bool, capture_time_us: i64) -> Result<()> {
         let result = unsafe {
             breadcast_caststream_sender_enqueue_frame(
@@ -246,7 +248,7 @@ impl CastStreamSender {
             )
         };
         if result != 0 {
-            bail!("frame not enqueued (session not negotiated yet)");
+            bail!("frame not posted (session not negotiated or shutting down)");
         }
         Ok(())
     }

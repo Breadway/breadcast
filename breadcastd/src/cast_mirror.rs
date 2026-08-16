@@ -83,7 +83,11 @@ impl CastMirrorSession {
     /// receiver dropping the connection) back to the daemon actor, so it
     /// can transition back to `Idle` and notify GUI clients even if nobody
     /// called `stop()`.
-    pub async fn start(device: CastDevice, daemon_tx: tokio::sync::mpsc::Sender<DaemonCommand>) -> Result<Self> {
+    pub async fn start(
+        device: CastDevice,
+        daemon_tx: tokio::sync::mpsc::Sender<DaemonCommand>,
+        generation: u64,
+    ) -> Result<Self> {
         let capture = CaptureSession::start().await.context("failed to start portal screen capture")?;
         let video_node_id = capture.video_node_id();
 
@@ -94,13 +98,18 @@ impl CastMirrorSession {
         // OFFER below rather than re-derived there, so the advertised stream
         // and the encoded stream cannot drift apart.
         let (pipeline, appsink, encoder, video_params) =
-            build_video_pipeline_for_streaming(video_node_id).context("failed to build the encode pipeline")?;
+            match build_video_pipeline_for_streaming(video_node_id) {
+                Ok(built) => built,
+                Err(e) => {
+                    close_capture_bounded(capture).await;
+                    return Err(e).context("failed to build the encode pipeline");
+                }
+            };
 
         {
             let pipeline_watch = pipeline.clone();
             std::thread::spawn(move || {
-                match breadcast_core::pipeline::run_until_error_or_timeout(&pipeline_watch, gst::ClockTime::from_seconds(3600))
-                {
+                match breadcast_core::pipeline::run_until_eos_or_error(&pipeline_watch) {
                     Ok(outcome) => tracing::debug!(?outcome, "encode pipeline bus watcher ended"),
                     Err(e) => tracing::error!(error = ?e, "encode pipeline error"),
                 }
@@ -111,19 +120,37 @@ impl CastMirrorSession {
         // (milliseconds on a LAN) but still blocking I/O -- run it off the
         // async worker thread pool rather than stalling it, even briefly.
         let device_for_connect = device.clone();
-        let (session, _media_events, raw_messages) = tokio::task::spawn_blocking(move || {
+        let connect = tokio::task::spawn_blocking(move || {
             CastSession::connect_app(
                 &device_for_connect,
                 CastDeviceApp::Custom(breadcast_core::caststream::MIRRORING_APP_ID.to_string()),
             )
         })
-        .await
-        .context("connect_app task panicked")?
-        .context("failed to connect and launch the Mirroring receiver")?;
+        .await;
+        let (session, _media_events, raw_messages) = match connect {
+            Ok(Ok(connected)) => connected,
+            Ok(Err(e)) => {
+                let _ = pipeline.set_state(gst::State::Null);
+                close_capture_bounded(capture).await;
+                return Err(e).context("failed to connect and launch the Mirroring receiver");
+            }
+            Err(e) => {
+                let _ = pipeline.set_state(gst::State::Null);
+                close_capture_bounded(capture).await;
+                return Err(e).context("connect_app task panicked");
+            }
+        };
 
         let (sender, stream_events) =
-            CastStreamSender::start(&device.host, "sender-0", session.transport_id(), video_params)
-                .context("failed to start the Cast Streaming session")?;
+            match CastStreamSender::start(&device.host, "sender-0", session.transport_id(), video_params) {
+                Ok(started) => started,
+                Err(e) => {
+                    stop_session_bounded(&session).await;
+                    let _ = pipeline.set_state(gst::State::Null);
+                    close_capture_bounded(capture).await;
+                    return Err(e).context("failed to start the Cast Streaming session");
+                }
+            };
         let sender = Arc::new(sender);
 
         let message_pump = {
@@ -138,9 +165,12 @@ impl CastMirrorSession {
         };
 
         let negotiated = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
         let event_pump = {
             let session = session.clone();
             let negotiated = negotiated.clone();
+            let failed = failed.clone();
+            let daemon_tx = daemon_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(event) = stream_events.recv() {
                     match event {
@@ -150,37 +180,68 @@ impl CastMirrorSession {
                             }
                         }
                         CastStreamEvent::Negotiated => negotiated.store(true, Ordering::Release),
-                        CastStreamEvent::Error(message) => tracing::warn!(%message, "Cast Streaming error"),
+                        CastStreamEvent::Error(message) => {
+                            tracing::warn!(%message, "Cast Streaming error");
+                            failed.store(true, Ordering::Release);
+                            // After negotiation the frame pump is running
+                            // and this is an unprompted death; before
+                            // negotiation, start() itself observes `failed`
+                            // and tears down.
+                            if negotiated.load(Ordering::Acquire) {
+                                let _ = daemon_tx.blocking_send(DaemonCommand::SessionEnded { generation });
+                            }
+                        }
                         CastStreamEvent::PictureLost => tracing::debug!("receiver reported picture loss"),
                     }
                 }
             })
         };
 
+        // From here every error path must use the same join/drop order as
+        // `stop()`. Building the session now and calling `stop()` on it is
+        // what keeps a leaked `CastStreamSender` from leaving
+        // PlatformClientPosix alive -- the next start would then hit
+        // OSP_CHECK(!instance_) and abort the daemon.
+        let mut started = Self {
+            pipeline,
+            session,
+            capture: Some(capture),
+            sender: Some(sender),
+            message_pump: Some(message_pump),
+            event_pump: Some(event_pump),
+            frame_pump: None,
+        };
+
         tracing::info!(device = %device.name, "sending Cast Streaming OFFER");
-        sender.negotiate();
+        if let Some(sender) = started.sender.as_ref() {
+            sender.negotiate();
+        }
 
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
-        while !negotiated.load(Ordering::Acquire) && tokio::time::Instant::now() < deadline {
+        while !negotiated.load(Ordering::Acquire)
+            && !failed.load(Ordering::Acquire)
+            && tokio::time::Instant::now() < deadline
+        {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
+        if failed.load(Ordering::Acquire) {
+            started.stop().await;
+            anyhow::bail!("Cast Streaming session error from {} during negotiation", device.name);
+        }
         if !negotiated.load(Ordering::Acquire) {
-            // Bounded for the same reason `Self::stop`'s calls are -- an
-            // unresponsive receiver (which is exactly what "negotiation
-            // timed out" implies) can wedge either of these forever
-            // otherwise, taking the whole single-threaded daemon actor
-            // down with it before this even gets to return an error.
-            stop_session_bounded(&session).await;
-            close_capture_bounded(capture).await;
+            started.stop().await;
             anyhow::bail!("never received an ANSWER from {} (negotiation timed out)", device.name);
         }
 
-        pipeline.set_state(gst::State::Playing).context("failed to start the encode pipeline")?;
+        if let Err(e) = started.pipeline.set_state(gst::State::Playing) {
+            started.stop().await;
+            return Err(e).context("failed to start the encode pipeline");
+        }
         tracing::info!(device = %device.name, "mirroring started");
 
         let frame_pump = {
             let device_name = device.name.clone();
-            let sender = sender.clone();
+            let sender = started.sender.as_ref().expect("sender installed above").clone();
             std::thread::spawn(move || {
                 let result = frame_pump_loop(&appsink, &encoder, &sender);
                 if let Err(e) = result {
@@ -190,19 +251,12 @@ impl CastMirrorSession {
                 // was, very recently) still alive. If the channel is full or
                 // closed, there's nothing more useful to do from this
                 // thread than drop the notification.
-                let _ = daemon_tx.blocking_send(DaemonCommand::SessionEnded);
+                let _ = daemon_tx.blocking_send(DaemonCommand::SessionEnded { generation });
             })
         };
+        started.frame_pump = Some(frame_pump);
 
-        Ok(Self {
-            pipeline,
-            session,
-            capture: Some(capture),
-            sender: Some(sender),
-            message_pump: Some(message_pump),
-            event_pump: Some(event_pump),
-            frame_pump: Some(frame_pump),
-        })
+        Ok(started)
     }
 
     /// Tears down the session. Order matters and is not interchangeable:

@@ -16,8 +16,9 @@ const WORKER_THREADS: usize = 8;
 
 /// Serves `root` (the `hlssink3` output directory: `playlist.m3u8` +
 /// `segment*.ts`) over plain HTTP. Runs a small fixed pool of worker
-/// threads; dropping the handle does not stop the server (there is no clean
-/// shutdown yet — matches the smoke-testing scope of the rest of Phase 2).
+/// threads. [`HttpServer::shutdown`] (also invoked from `Drop`) unblocks
+/// those workers and closes the listener so a finished DLNA session does
+/// not keep the last screen-recording segments reachable on the LAN.
 ///
 /// Every servable path is namespaced under a random token
 /// (`/<token>/playlist.m3u8`, etc. — see [`HttpServer::token`]) rather than
@@ -37,6 +38,7 @@ const WORKER_THREADS: usize = 8;
 pub struct HttpServer {
     addr: SocketAddr,
     token: String,
+    server: Option<Arc<tiny_http::Server>>,
 }
 
 impl HttpServer {
@@ -74,7 +76,19 @@ impl HttpServer {
             });
         }
 
-        Ok(Self { addr, token })
+        Ok(Self { addr, token, server: Some(server) })
+    }
+
+    /// Unblocks every worker and drops the listener. After this returns the
+    /// bind address is free and the path token no longer serves anything.
+    /// Safe to call more than once.
+    pub fn shutdown(&mut self) {
+        let Some(server) = self.server.take() else { return };
+        // `unblock` wakes one `recv()` at a time; wake every worker so
+        // they all observe the error and drop their Arc.
+        for _ in 0..WORKER_THREADS {
+            server.unblock();
+        }
     }
 
     /// The bound address, e.g. `0.0.0.0:41823`. Combine with this
@@ -90,7 +104,17 @@ impl HttpServer {
     /// doc for why that can't just be `self.addr()`), including the
     /// unguessable path token every request must carry.
     pub fn url(&self, host: std::net::IpAddr, relative: &str) -> String {
-        format!("http://{host}:{}/{}/{relative}", self.addr.port(), self.token)
+        let port = self.addr.port();
+        match host {
+            std::net::IpAddr::V6(v6) => format!("http://[{v6}]:{port}/{}/{relative}", self.token),
+            std::net::IpAddr::V4(v4) => format!("http://{v4}:{port}/{}/{relative}", self.token),
+        }
+    }
+}
+
+impl Drop for HttpServer {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -123,7 +147,7 @@ fn random_token() -> String {
 /// multi-range (multipart ranges aren't needed for HLS segment fetches, and
 /// falling back to a full 200 response for those is always a valid
 /// response under the HTTP spec).
-fn parse_range(value: &str, len: usize) -> Option<(usize, usize)> {
+pub(crate) fn parse_range(value: &str, len: usize) -> Option<(usize, usize)> {
     let spec = value.strip_prefix("bytes=")?;
     if spec.contains(',') || len == 0 {
         return None;
@@ -233,7 +257,11 @@ fn handle_request(request: tiny_http::Request, root: &Path, token: &str) -> Resu
     ];
 
     let (status, body) = match range {
-        Some((start, end)) if start <= end && end < data.len() => {
+        // RFC 7233: a last-byte-pos past the end is clamped, not 416.
+        // HLS clients often probe `bytes=0-1048575` against a ~400KB
+        // segment; answering 416 stalls playback with no encoder error.
+        Some((start, end)) if start < data.len() && start <= end => {
+            let end = end.min(data.len() - 1);
             headers.push(("Content-Range".to_string(), format!("bytes {start}-{end}/{}", data.len())));
             (206u16, data[start..=end].to_vec())
         }
@@ -263,4 +291,26 @@ fn respond_status(request: tiny_http::Request, status: u16) -> Result<()> {
     request
         .respond(tiny_http::Response::empty(status))
         .context("failed to write HTTP error response")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_range;
+
+    #[test]
+    fn parse_range_accepts_the_usual_hls_shapes() {
+        assert_eq!(parse_range("bytes=0-99", 200), Some((0, 99)));
+        assert_eq!(parse_range("bytes=50-", 200), Some((50, 199)));
+        assert_eq!(parse_range("bytes=-20", 200), Some((180, 199)));
+        assert_eq!(parse_range("bytes=0-0", 200), Some((0, 0)));
+    }
+
+    #[test]
+    fn parse_range_rejects_malformed_or_multipart() {
+        assert_eq!(parse_range("bytes=", 200), None);
+        assert_eq!(parse_range("bytes=-", 200), None);
+        assert_eq!(parse_range("bytes=0-10,20-30", 200), None);
+        assert_eq!(parse_range("items=0-10", 200), None);
+        assert_eq!(parse_range("bytes=0-10", 0), None);
+    }
 }

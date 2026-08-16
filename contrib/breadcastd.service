@@ -7,7 +7,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.cargo/bin/breadcastd
+ExecStart=%h/.local/bin/breadcastd
 Restart=on-failure
 RestartSec=2
 

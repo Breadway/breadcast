@@ -1,8 +1,8 @@
 //! Raw FFI bindings to `src/facade.h`/`src/facade.cc`, which wrap a pruned,
 //! vendored subset of `chromium/openscreen`'s Cast Streaming sender (see
 //! `vendor/openscreen/PATCHES.md`). This crate is intentionally low-level and
-//! unsafe -- see `breadcast-caststream` (not this crate) for the ergonomic,
-//! thread-safe wrapper most callers should use instead.
+//! unsafe -- see `breadcast-core::caststream` for the ergonomic, thread-safe
+//! wrapper most callers should use instead.
 //!
 //! # Threading contract
 //!

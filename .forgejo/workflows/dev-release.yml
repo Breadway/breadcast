@@ -1,9 +1,8 @@
 name: dev release
 
-# Publishes a dev-track build on every push to `dev` —
-# separate from release.yml's tag-triggered stable releases. See
-# bread-ecosystem's docs/release-channels.md for the three-track policy
-# this is part of.
+# Publishes a dev-track build on every push to `main` (single-trunk).
+# The leftover `dev` trigger is kept so an old branch push still works
+# until that branch is deleted. See CONTRIBUTING.md.
 on:
   push:
     branches: ['main', 'dev']
@@ -16,7 +15,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf src && mkdir src
-          git clone --branch main --depth 1 \
+          git clone --branch "${GITHUB_REF_NAME}" --depth 1 \
             "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" src
 
       - name: build
@@ -37,7 +36,7 @@ jobs:
           if [ -n "${LATEST_TAG}" ]; then
             CUR="${LATEST_TAG}"
           else
-            CUR="$(grep -m1 '^version' breadcast/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
+            CUR="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
           fi
           IFS='.' read -r MA MI PA <<< "${CUR}"
           SHA="$(git rev-parse --short HEAD)"

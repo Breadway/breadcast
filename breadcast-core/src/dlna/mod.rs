@@ -21,3 +21,7 @@ pub use discovery::{DlnaDiscovery, DlnaDiscoveryEvent};
 pub use session::DlnaSession;
 
 const AV_TRANSPORT: URN = URN::service("schemas-upnp-org", "AVTransport", 1);
+/// Device-type search. Many TVs answer M-SEARCH for MediaRenderer but not
+/// for the AVTransport *service* URN (Windows "Cast to Device" searches
+/// this). After resolve we still require AVTransport.
+const MEDIA_RENDERER: URN = URN::device("schemas-upnp-org", "MediaRenderer", 1);

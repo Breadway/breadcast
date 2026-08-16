@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use super::device::DlnaDevice;
-use super::AV_TRANSPORT;
+use super::{AV_TRANSPORT, MEDIA_RENDERER};
 
 /// How often to re-issue an SSDP search burst. Unlike mDNS (continuous
 /// multicast browsing via `mdns-sd` in [`crate::discovery`]), SSDP has no
@@ -69,7 +69,7 @@ impl DlnaDiscovery {
             let mut known: HashMap<String, (DlnaDevice, u32)> = HashMap::new();
 
             loop {
-                let search_target = SearchTarget::URN(AV_TRANSPORT);
+                let search_target = SearchTarget::URN(MEDIA_RENDERER);
                 match rupnp::discover(&search_target, SEARCH_TIMEOUT, None).await {
                     Ok(stream) => {
                         use futures_util::StreamExt;
@@ -86,6 +86,10 @@ impl DlnaDiscovery {
                             };
 
                             let url = device.url().to_string();
+                            if device.find_service(&AV_TRANSPORT).is_none() {
+                                debug!(%url, "UPnP device has no AVTransport, skipping");
+                                continue;
+                            }
                             confirmed.insert(url.clone());
 
                             if let Some(entry) = known.get_mut(&url) {

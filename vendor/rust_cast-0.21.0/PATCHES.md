@@ -22,11 +22,14 @@ channel claims the namespace.
 
 ## The patch
 
-`src/lib.rs`: added `CastDevice::send_message<M: Serialize>(&self, namespace,
-destination, message)`, built the same way `ReceiverChannel::broadcast_message()`
-is internally, but with a caller-supplied `destination` instead of a
-hardcoded `"*"`. See the doc comment on that method for the exact rationale
-(marked "LOCAL PATCH (breadcast, not upstream)").
+`src/lib.rs`: added `CastDevice::send_message(&self, namespace: &str,
+destination: &str, message: &str)`, built the same way
+`ReceiverChannel::broadcast_message()` is internally, but with a
+caller-supplied `destination` instead of a hardcoded `"*"`. The payload is
+a raw string (already-serialized JSON from the vendored openscreen C++),
+not a `Serialize` value -- a generic `M: Serialize` would double-encode
+the OFFER. See the doc comment on that method (marked "LOCAL PATCH
+(breadcast, not upstream)").
 
 ## Rolling the pin
 

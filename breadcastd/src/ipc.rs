@@ -13,6 +13,8 @@
 //! a time, but nothing here assumes that) can connect concurrently; each
 //! gets its own copy of every broadcast event.
 
+use std::os::unix::fs::DirBuilderExt;
+
 use anyhow::{Context, Result};
 use breadcast_core::ipc::{ClientRequest, ServerMessage, socket_path};
 use serde_json::Value;
@@ -31,7 +33,13 @@ use crate::daemon::DaemonCommand;
 pub async fn serve(daemon_tx: mpsc::Sender<DaemonCommand>, events_tx: broadcast::Sender<ServerMessage>) -> Result<()> {
     let socket_path = socket_path()?;
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
+        // 0700 even if umask is loose -- this directory holds the control
+        // socket, and XDG_RUNTIME_DIR itself is 0700 but a recreate after
+        // a wiped runtime dir should not inherit a world-readable mode.
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
             .with_context(|| format!("failed to create socket dir {}", parent.display()))?;
     }
     // A stale socket file from an unclean previous exit makes bind() fail
@@ -45,7 +53,18 @@ pub async fn serve(daemon_tx: mpsc::Sender<DaemonCommand>, events_tx: broadcast:
     tracing::info!(path = %socket_path.display(), "IPC socket listening");
 
     loop {
-        let (stream, _addr) = listener.accept().await.context("failed to accept IPC connection")?;
+        let (stream, _addr) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(e) => {
+                // EMFILE / a single bad accept must not take the control
+                // socket down for the rest of the daemon's life -- discovery
+                // would keep running while every `breadcast` launch reports
+                // "isn't running".
+                tracing::warn!(error = %e, "IPC accept failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let daemon_tx = daemon_tx.clone();
         let events_rx = events_tx.subscribe();
         tokio::spawn(async move {
@@ -106,10 +125,14 @@ async fn handle_connection(
                 continue;
             }
         };
-        let response = handle_request(request, &daemon_tx).await;
-        if writer_tx.send(response).is_err() {
-            break;
-        }
+        // Handle off the read loop so a long `start_cast` (portal picker)
+        // does not block `stop_cast` sitting in the same socket buffer.
+        let daemon_tx = daemon_tx.clone();
+        let writer_tx = writer_tx.clone();
+        tokio::spawn(async move {
+            let response = handle_request(request, &daemon_tx).await;
+            let _ = writer_tx.send(response);
+        });
     }
 
     forward_task.abort();

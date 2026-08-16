@@ -451,6 +451,7 @@ pub fn pull_encoded_frame(appsink: &gst_app::AppSink) -> Result<Option<(Vec<u8>,
     let poll = gst::ClockTime::from_mseconds(CAPTURE_STALL_POLL.as_millis() as u64);
     let mut stalled_for = Duration::ZERO;
     loop {
+        let pulled_at = std::time::Instant::now();
         let Some(sample) = appsink.try_pull_sample(Some(poll)) else {
             // EOS is the ordinary end: the user hit "Stop sharing" in the
             // portal, or the source went away.
@@ -458,16 +459,18 @@ pub fn pull_encoded_frame(appsink: &gst_app::AppSink) -> Result<Option<(Vec<u8>,
                 return Ok(None);
             }
             // Teardown from another thread (`CastMirrorSession::stop` sets
-            // the pipeline to Null) makes the sink flush, and a flushing
-            // sink returns `None` *immediately* rather than after the
-            // timeout. Treat that as a clean end too -- otherwise this would
-            // busy-spin for the whole stall budget and then report a
-            // spurious "capture stalled" on every normal stop.
-            if !matches!(appsink.current_state(), gst::State::Playing | gst::State::Paused) {
+            // the pipeline to Null) flushes the sink *before*
+            // `current_state()` leaves Playing. A flushing sink returns
+            // `None` immediately; counting that as stall time used to
+            // raise a spurious "capture stalled" on every normal stop.
+            if !matches!(appsink.current_state(), gst::State::Playing | gst::State::Paused)
+                || matches!(appsink.pending_state(), gst::State::Null | gst::State::Ready)
+                || pulled_at.elapsed() < Duration::from_millis(20)
+            {
                 return Ok(None);
             }
 
-            stalled_for += CAPTURE_STALL_POLL;
+            stalled_for += pulled_at.elapsed();
             if stalled_for < CAPTURE_STALL_TIMEOUT {
                 continue;
             }
@@ -529,11 +532,56 @@ pub enum RunOutcome {
     Timeout,
 }
 
+/// Blocks the calling thread until the pipeline reports an error or EOS.
+/// Unlike [`run_until_error_or_timeout`] this does not give up after a
+/// fixed duration -- a live mirror session can last hours, and a 1-hour
+/// leftover from the smoke-test helper was leaving GStreamer errors
+/// unobserved for the rest of the cast. Also returns [`RunOutcome::Eos`]
+/// once the pipeline has been torn down from another thread (`Null`), so
+/// a daemon watcher does not sit forever after `stop()`.
+pub fn run_until_eos_or_error(pipeline: &gst::Pipeline) -> Result<RunOutcome> {
+    let bus = pipeline.bus().context("pipeline has no bus")?;
+    loop {
+        let Some(msg) = bus.timed_pop_filtered(
+            gst::ClockTime::from_mseconds(500),
+            &[gst::MessageType::Error, gst::MessageType::Eos, gst::MessageType::Warning],
+        ) else {
+            if !matches!(
+                pipeline.current_state(),
+                gst::State::Playing | gst::State::Paused | gst::State::Ready
+            ) {
+                return Ok(RunOutcome::Eos);
+            }
+            continue;
+        };
+
+        use gst::MessageView;
+        match msg.view() {
+            MessageView::Error(e) => {
+                bail!(
+                    "GStreamer pipeline error from {:?}: {} ({:?})",
+                    e.src().map(|s| s.path_string()),
+                    e.error(),
+                    e.debug()
+                );
+            }
+            MessageView::Warning(w) => {
+                tracing::warn!(
+                    src = ?w.src().map(|s| s.path_string()),
+                    error = %w.error(),
+                    "GStreamer pipeline warning"
+                );
+            }
+            MessageView::Eos(_) => return Ok(RunOutcome::Eos),
+            _ => {}
+        }
+    }
+}
+
 /// Blocks the calling thread until the pipeline reports an error or EOS, or
 /// `timeout` elapses (whichever first). Returns which of those happened, or
 /// `Err` on a real pipeline error. Meant for smoke-testing from a
-/// synchronous `main`/example; the real daemon will want an async/watch-based
-/// version instead of blocking a thread.
+/// synchronous `main`/example; the daemon uses [`run_until_eos_or_error`].
 pub fn run_until_error_or_timeout(pipeline: &gst::Pipeline, timeout: gst::ClockTime) -> Result<RunOutcome> {
     let bus = pipeline.bus().context("pipeline has no bus")?;
     let deadline = std::time::Instant::now() + std::time::Duration::from(timeout);

@@ -33,7 +33,29 @@ pub enum DaemonCommand {
     /// dropping the connection or stopping playback) -- as opposed to
     /// `StopCast` being called. Either way the daemon needs to forget the
     /// (now-dead) session and go back to `Idle`.
-    SessionEnded,
+    SessionEnded { generation: u64 },
+    /// Result of a `StartCast` that ran off this actor (the portal picker
+    /// and OFFER/ANSWER wait must not stall `list_devices` / `stop_cast`).
+    /// Ignored when `generation` no longer matches -- that means `StopCast`
+    /// cancelled the in-flight start.
+    StartFinished {
+        generation: u64,
+        outcome: Result<StartedSession, StartFailed>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+/// A session that finished starting, ready to be installed as `active_session`.
+pub(crate) struct StartedSession {
+    pub session: ActiveSession,
+    pub device_id: String,
+    pub device_name: String,
+    pub protocol: Protocol,
+}
+
+pub(crate) struct StartFailed {
+    pub device_id: String,
+    pub error: String,
 }
 
 pub fn spawn(events_tx: broadcast::Sender<ServerMessage>, bread_client: BreadClient) -> mpsc::Sender<DaemonCommand> {
@@ -45,6 +67,8 @@ pub fn spawn(events_tx: broadcast::Sender<ServerMessage>, bread_client: BreadCli
             dlna_devices: HashMap::new(),
             state: StateInfo::Idle,
             active_session: None,
+            starting: false,
+            start_generation: 0,
             events_tx,
             bread_client,
             self_tx,
@@ -59,7 +83,7 @@ pub fn spawn(events_tx: broadcast::Sender<ServerMessage>, bread_client: BreadCli
 /// The currently active mirroring session, if any -- exactly one of the two
 /// protocol-specific session types, chosen by which device map `StartCast`
 /// found the requested device id in.
-enum ActiveSession {
+pub(crate) enum ActiveSession {
     Cast(CastMirrorSession),
     Dlna(Box<DlnaMirrorSession>),
 }
@@ -86,6 +110,13 @@ struct Daemon {
     dlna_devices: HashMap<String, DlnaDevice>,
     state: StateInfo,
     active_session: Option<ActiveSession>,
+    /// True while a `StartCast` is running off this actor (portal picker /
+    /// negotiation). Distinct from `active_session` so a second start is
+    /// rejected before the first one has a session to install.
+    starting: bool,
+    /// Bumped by `StopCast` so a `StartFinished` from a cancelled start
+    /// tears its session down instead of installing it.
+    start_generation: u64,
     events_tx: broadcast::Sender<ServerMessage>,
     /// Used to publish `bread.cast.mirroring_started`/`.stopped`/`.failed`
     /// on state transitions -- see `bread_events.rs`. A no-op if breadd
@@ -111,6 +142,12 @@ impl Daemon {
                 self.start_cast(device_id, reply).await;
             }
             DaemonCommand::StopCast { reply } => {
+                if self.starting {
+                    // Invalidate the in-flight start so its StartFinished
+                    // tears the session down instead of installing it.
+                    self.starting = false;
+                    self.start_generation = self.start_generation.wrapping_add(1);
+                }
                 if let Some(session) = self.active_session.take() {
                     session.stop().await;
                     bread_events::emit_mirroring_stopped(&self.bread_client);
@@ -119,19 +156,31 @@ impl Daemon {
                 self.broadcast_state();
                 let _ = reply.send(Ok(()));
             }
-            DaemonCommand::SessionEnded => {
-                // The session already tore itself down (that's what
-                // triggered this) -- just drop our handle to it and update
-                // state. Ignored if this arrives after an explicit
-                // `StopCast` already cleared `active_session` (the
-                // background pump/poll it came from may briefly outlive
-                // that call).
-                if self.active_session.take().is_some() {
+            DaemonCommand::SessionEnded { generation } => {
+                // Ignore a late notification from a session that already
+                // stopped (or whose start was cancelled). An abandoned
+                // pump after a 5s join timeout used to take() the *next*
+                // session and flip the UI to Idle while it was still live.
+                if generation != self.start_generation {
+                    return;
+                }
+                // The session's pump/poll noticed death, but the session
+                // handle itself has *not* been torn down -- there is no
+                // Drop impl. Dropping it here used to skip CastSession::stop
+                // (TV left on the last frame), skip portal close (PipeWire
+                // leak), and destroy the FFI sender while pump threads were
+                // still calling into it. Always run the ordered stop.
+                if let Some(session) = self.active_session.take() {
                     tracing::info!("mirror session ended on its own, returning to idle");
+                    session.stop().await;
+                    self.start_generation = self.start_generation.wrapping_add(1);
                     self.state = StateInfo::Idle;
                     self.broadcast_state();
                     bread_events::emit_mirroring_stopped(&self.bread_client);
                 }
+            }
+            DaemonCommand::StartFinished { generation, outcome, reply } => {
+                self.on_start_finished(generation, outcome, reply).await;
             }
             DaemonCommand::CastDeviceFound(device) => {
                 // mDNS resolves one physical device on every local address
@@ -147,8 +196,8 @@ impl Daemon {
                 );
                 if should_replace {
                     self.cast_devices.insert(device.id.clone(), device);
+                    self.broadcast_devices();
                 }
-                self.broadcast_devices();
             }
             DaemonCommand::CastDeviceLost(id) => {
                 self.cast_devices.remove(&id);
@@ -166,54 +215,100 @@ impl Daemon {
     }
 
     async fn start_cast(&mut self, device_id: String, reply: oneshot::Sender<Result<(), String>>) {
-        if self.active_session.is_some() {
+        if self.active_session.is_some() || self.starting {
             let _ = reply.send(Err("already casting -- stop the current session first".to_string()));
             return;
         }
 
         if let Some(device) = self.cast_devices.get(&device_id).cloned() {
-            match CastMirrorSession::start(device.clone(), self.self_tx.clone()).await {
-                Ok(session) => {
-                    self.active_session = Some(ActiveSession::Cast(session));
-                    self.state =
-                        StateInfo::Casting { device_id: device.id.clone(), device_name: device.name.clone(), protocol: Protocol::Cast };
-                    self.broadcast_state();
-                    bread_events::emit_mirroring_started(&self.bread_client, &device.id, &device.name, "cast");
-                    let _ = reply.send(Ok(()));
-                }
-                Err(e) => {
+            self.starting = true;
+            let generation = self.start_generation;
+            let daemon_tx = self.self_tx.clone();
+            tokio::spawn(async move {
+                let outcome = match CastMirrorSession::start(device.clone(), daemon_tx.clone(), generation).await {
+                    Ok(session) => Ok(StartedSession {
+                        session: ActiveSession::Cast(session),
+                        device_id: device.id,
+                        device_name: device.name,
+                        protocol: Protocol::Cast,
+                    }),
                     // `{e:#}` (not `{e}`/`to_string()`) so the full anyhow
                     // context chain reaches the caller/GUI instead of just
                     // the outermost ".context()" message.
-                    bread_events::emit_mirroring_failed(&self.bread_client, &device.id, &format!("{e:#}"));
-                    let _ = reply.send(Err(format!("{e:#}")));
-                }
-            }
+                    Err(e) => Err(StartFailed { device_id: device.id, error: format!("{e:#}") }),
+                };
+                let _ = daemon_tx.send(DaemonCommand::StartFinished { generation, outcome, reply }).await;
+            });
             return;
         }
 
         if let Some(device) = self.dlna_devices.get(&device_id).cloned() {
-            match DlnaMirrorSession::start(device.clone(), self.self_tx.clone()).await {
-                Ok(session) => {
-                    self.active_session = Some(ActiveSession::Dlna(Box::new(session)));
-                    self.state = StateInfo::Casting {
-                        device_id: device.url.clone(),
-                        device_name: device.friendly_name.clone(),
+            self.starting = true;
+            let generation = self.start_generation;
+            let daemon_tx = self.self_tx.clone();
+            tokio::spawn(async move {
+                let outcome = match DlnaMirrorSession::start(device.clone(), daemon_tx.clone(), generation).await {
+                    Ok(session) => Ok(StartedSession {
+                        session: ActiveSession::Dlna(Box::new(session)),
+                        device_id: device.url,
+                        device_name: device.friendly_name,
                         protocol: Protocol::Dlna,
-                    };
-                    self.broadcast_state();
-                    bread_events::emit_mirroring_started(&self.bread_client, &device.url, &device.friendly_name, "dlna");
-                    let _ = reply.send(Ok(()));
-                }
-                Err(e) => {
-                    bread_events::emit_mirroring_failed(&self.bread_client, &device.url, &format!("{e:#}"));
-                    let _ = reply.send(Err(format!("{e:#}")));
-                }
-            }
+                    }),
+                    Err(e) => Err(StartFailed { device_id: device.url, error: format!("{e:#}") }),
+                };
+                let _ = daemon_tx.send(DaemonCommand::StartFinished { generation, outcome, reply }).await;
+            });
             return;
         }
 
-        let _ = reply.send(Err(format!("unknown device id \"{device_id}\"")));
+        let error = format!("unknown device id \"{device_id}\"");
+        bread_events::emit_mirroring_failed(&self.bread_client, &device_id, &error);
+        let _ = reply.send(Err(error));
+    }
+
+    async fn on_start_finished(
+        &mut self,
+        generation: u64,
+        outcome: Result<StartedSession, StartFailed>,
+        reply: oneshot::Sender<Result<(), String>>,
+    ) {
+        if generation != self.start_generation || !self.starting {
+            // StopCast cancelled this start while the portal/negotiation
+            // was still running. Tear the session down if it succeeded
+            // anyway, so we don't leak a sender or leave the TV casting.
+            if let Ok(started) = outcome {
+                started.session.stop().await;
+            }
+            let _ = reply.send(Err("start cancelled".to_string()));
+            return;
+        }
+        self.starting = false;
+        match outcome {
+            Ok(started) => {
+                self.active_session = Some(started.session);
+                self.state = StateInfo::Casting {
+                    device_id: started.device_id.clone(),
+                    device_name: started.device_name.clone(),
+                    protocol: started.protocol,
+                };
+                self.broadcast_state();
+                let protocol = match started.protocol {
+                    Protocol::Cast => "cast",
+                    Protocol::Dlna => "dlna",
+                };
+                bread_events::emit_mirroring_started(
+                    &self.bread_client,
+                    &started.device_id,
+                    &started.device_name,
+                    protocol,
+                );
+                let _ = reply.send(Ok(()));
+            }
+            Err(failed) => {
+                bread_events::emit_mirroring_failed(&self.bread_client, &failed.device_id, &failed.error);
+                let _ = reply.send(Err(failed.error));
+            }
+        }
     }
 
     fn device_list(&self) -> Vec<DeviceInfo> {

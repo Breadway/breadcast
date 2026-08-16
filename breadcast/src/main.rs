@@ -13,7 +13,9 @@ use std::rc::Rc;
 use bread_theme::load_palette;
 use breadcast_core::ipc::{DeviceInfo, Protocol, ServerMessage, StateInfo};
 use gtk4::prelude::*;
-use gtk4::{Align, Application, Box as GBox, Button, Label, ListBox, Orientation, SelectionMode, glib};
+use gtk4::{
+    Align, Application, Box as GBox, Button, EventControllerKey, Label, ListBox, Orientation, SelectionMode, glib,
+};
 use ipc_client::IpcClient;
 
 const PANEL_WIDTH: i32 = 360;
@@ -70,11 +72,49 @@ fn build_ui(app: &Application) {
     empty_label.add_css_class("cast-empty-label");
     panel.append(&empty_label);
 
+    let error_label = Label::new(None);
+    error_label.add_css_class("cast-error-label");
+    error_label.set_wrap(true);
+    error_label.set_visible(false);
+    panel.append(&error_label);
+
     window.set_child(Some(&panel));
     bread_utils::gtk_popup::close_on_outside_click(&window, &panel, {
         let window = window.clone();
         move || window.close()
     });
+
+    let key_ctrl = EventControllerKey::new();
+    key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    {
+        let window = window.clone();
+        let list = list.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            use gtk4::gdk::Key;
+            match key {
+                Key::Escape => {
+                    window.close();
+                    glib::Propagation::Stop
+                }
+                Key::Return | Key::KP_Enter => {
+                    if let Some(row) = list.selected_row() {
+                        row.activate();
+                    }
+                    glib::Propagation::Stop
+                }
+                Key::Down => {
+                    bread_utils::gtk_popup::select_next_visible(&list);
+                    glib::Propagation::Stop
+                }
+                Key::Up => {
+                    bread_utils::gtk_popup::select_prev_visible(&list);
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
+    }
+    window.add_controller(key_ctrl);
 
     match IpcClient::connect() {
         Ok((client, rx)) => {
@@ -84,10 +124,16 @@ fn build_ui(app: &Application) {
 
             list.connect_row_activated({
                 let client = client.clone();
+                let window = window.clone();
                 move |_, row| {
                     let Some(device_id) = (unsafe { row.data::<String>("device_id") }) else { return };
                     let device_id = unsafe { device_id.as_ref() }.clone();
                     let _ = client.borrow_mut().send("start_cast", serde_json::json!({ "device_id": device_id }));
+                    // Close before the portal picker appears -- this overlay
+                    // is KeyboardMode::Exclusive and otherwise steals
+                    // Enter/Escape from the picker (and swallows clicks on
+                    // the dimmed background).
+                    window.close();
                 }
             });
 
@@ -100,11 +146,26 @@ fn build_ui(app: &Application) {
 
             let list = list.clone();
             let empty_label = empty_label.clone();
+            let error_label = error_label.clone();
             let status_pill = status_pill.clone();
             let stop_button = stop_button.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-                while let Ok(message) = rx.try_recv() {
-                    handle_server_message(message, &list, &empty_label, &status_pill, &stop_button);
+                loop {
+                    match rx.try_recv() {
+                        Ok(message) => {
+                            handle_server_message(message, &list, &empty_label, &error_label, &status_pill, &stop_button);
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            empty_label.set_label("breadcastd isn't running");
+                            empty_label.set_visible(true);
+                            list.set_visible(false);
+                            stop_button.set_visible(false);
+                            status_pill.set_label("Offline");
+                            status_pill.remove_css_class("casting");
+                            return glib::ControlFlow::Break;
+                        }
+                    }
                 }
                 glib::ControlFlow::Continue
             });
@@ -125,6 +186,7 @@ fn handle_server_message(
     message: ServerMessage,
     list: &ListBox,
     empty_label: &Label,
+    error_label: &Label,
     status_pill: &Label,
     stop_button: &Button,
 ) {
@@ -138,6 +200,8 @@ fn handle_server_message(
         }
         ServerMessage::Response { error: Some(error), .. } => {
             eprintln!("breadcast: request failed: {error}");
+            error_label.set_label(&error);
+            error_label.set_visible(true);
             None
         }
         _ => None,
@@ -145,7 +209,10 @@ fn handle_server_message(
     let Some((event, data)) = payload else { return };
     match event.as_str() {
         "device_list_changed" => update_device_list(list, empty_label, data),
-        "state_changed" => update_state(status_pill, stop_button, data),
+        "state_changed" => {
+            error_label.set_visible(false);
+            update_state(status_pill, stop_button, data);
+        }
         _ => {}
     }
 }

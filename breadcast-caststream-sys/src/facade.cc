@@ -209,9 +209,20 @@ CastStreamSender* breadcast_caststream_sender_create(
   // than once process-wide only if ShutDown() was called first -- breadcast
   // only ever has one active cast-streaming session at a time, so this
   // assumption (baked into PlatformClientPosix's own singleton design) holds.
+  //
+  // Create() itself OSP_CHECKs that no instance exists and aborts the
+  // process if a previous sender leaked (a failed start that never reached
+  // destroy()). Fail the new create instead of taking the daemon down.
+  if (openscreen::PlatformClientPosix::GetInstance() != nullptr) {
+    return nullptr;
+  }
   openscreen::PlatformClientPosix::Create(std::chrono::milliseconds(50));
-  openscreen::TaskRunner& task_runner =
-      openscreen::PlatformClientPosix::GetInstance()->GetTaskRunner();
+  openscreen::PlatformClientPosix* instance =
+      openscreen::PlatformClientPosix::GetInstance();
+  if (instance == nullptr) {
+    return nullptr;
+  }
+  openscreen::TaskRunner& task_runner = instance->GetTaskRunner();
 
   breadcast_caststream::VideoParams params;
   params.width = width;
@@ -255,6 +266,13 @@ CastStreamSender* breadcast_caststream_sender_create(
 }
 
 void breadcast_caststream_sender_negotiate(CastStreamSender* sender) {
+  // environment is reset during destroy() on the TaskRunner thread; a call
+  // that races teardown (or arrives after a failed start) must not
+  // dereference the unique_ptr.
+  if (!sender || sender->shutting_down.load(std::memory_order_acquire) ||
+      !sender->environment) {
+    return;
+  }
   sender->environment->task_runner().PostTask([sender] {
     if (sender->shutting_down.load(std::memory_order_acquire) ||
         !sender->session) {
@@ -272,6 +290,10 @@ void breadcast_caststream_sender_on_message(CastStreamSender* sender,
                                             size_t message_namespace_len,
                                             const char* message,
                                             size_t message_len) {
+  if (!sender || sender->shutting_down.load(std::memory_order_acquire) ||
+      !sender->environment) {
+    return;
+  }
   auto source = std::make_shared<std::string>(source_id, source_id_len);
   auto ns = std::make_shared<std::string>(message_namespace, message_namespace_len);
   auto body = std::make_shared<std::string>(message, message_len);
@@ -289,6 +311,10 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
                                                   size_t data_len,
                                                   int32_t is_key_frame,
                                                   int64_t capture_time_us) {
+  if (!sender || sender->shutting_down.load(std::memory_order_acquire) ||
+      !sender->environment) {
+    return -1;
+  }
   if (!sender->negotiated.load(std::memory_order_acquire)) {
     return -1;
   }
@@ -378,6 +404,12 @@ int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
     switch (video_sender->EnqueueFrame(frame)) {
       case Sender::OK:
         sender->enqueue_ok.fetch_add(1, std::memory_order_relaxed);
+        // A key frame that actually landed resyncs the decoder, so the
+        // "next frame must be an IDR" latch can clear. A rejected key
+        // frame leaves the flag set (the reject branches below).
+        if (is_key) {
+          sender->frame_chain_broken.store(false, std::memory_order_relaxed);
+        }
         break;
       case Sender::PAYLOAD_TOO_LARGE:
         sender->enqueue_payload_too_large.fetch_add(1, std::memory_order_relaxed);
@@ -418,7 +450,18 @@ void breadcast_caststream_sender_take_stats(CastStreamSender* sender,
 }
 
 int32_t breadcast_caststream_sender_needs_key_frame(CastStreamSender* sender) {
-  return sender->needs_key_frame.load(std::memory_order_relaxed) ? 1 : 0;
+  if (!sender) {
+    return 0;
+  }
+  // `frame_chain_broken` is the drop-side latch SchedulePoll must not
+  // clobber (see the field comment). Load, don't exchange: the encoder
+  // may take several frames to honour a force-key-unit, and a consuming
+  // read here would forget the drop if the next poll happened before
+  // that IDR was actually EnqueueFrame'd (cleared on OK + is_key above).
+  return (sender->frame_chain_broken.load(std::memory_order_relaxed) ||
+          sender->needs_key_frame.load(std::memory_order_relaxed))
+             ? 1
+             : 0;
 }
 
 int32_t breadcast_caststream_sender_estimated_bandwidth_bps(CastStreamSender* sender) {
@@ -437,18 +480,24 @@ void breadcast_caststream_sender_destroy(CastStreamSender* sender) {
 
   // These must be torn down on the TaskRunner thread (they hold raw
   // references into it and into `environment`), so hop over there and block
-  // until it's done before shutting the TaskRunner itself down.
-  std::promise<void> done;
-  std::future<void> done_future = done.get_future();
-  sender->environment->task_runner().PostTask([sender, &done] {
-    sender->session.reset();
-    sender->message_port.reset();
-    sender->environment.reset();
-    done.set_value();
-  });
-  done_future.wait();
+  // until it's done before shutting the TaskRunner itself down. A sender
+  // whose Environment never got built (create failed mid-flight) has no
+  // task runner to hop to.
+  if (sender->environment) {
+    std::promise<void> done;
+    std::future<void> done_future = done.get_future();
+    sender->environment->task_runner().PostTask([sender, &done] {
+      sender->session.reset();
+      sender->message_port.reset();
+      sender->environment.reset();
+      done.set_value();
+    });
+    done_future.wait();
+  }
 
-  openscreen::PlatformClientPosix::ShutDown();
+  if (openscreen::PlatformClientPosix::GetInstance() != nullptr) {
+    openscreen::PlatformClientPosix::ShutDown();
+  }
   delete sender;
 }
 

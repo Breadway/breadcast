@@ -47,6 +47,11 @@ pub fn build_css(palette: &Palette) -> String {
             color: {overlay};
             padding: 24px 8px;
         }}
+        .cast-error-label {{
+            color: #e35b5b;
+            font-size: 0.85em;
+            padding: 4px 8px;
+        }}
         .cast-stop-button {{
             background-color: alpha(#e35b5b, 0.15);
             color: #e35b5b;

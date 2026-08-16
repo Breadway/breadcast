@@ -56,18 +56,36 @@ impl DlnaSession {
     /// renderer would reject with no useful diagnostic.
     pub async fn load(&self, content_url: &str) -> Result<()> {
         let escaped = xml_escape(content_url);
+        // Many Samsung/LG renderers reject an empty CurrentURIMetaData and
+        // need DIDL-Lite + protocolInfo before they will play a live HLS
+        // playlist. The DIDL itself is then XML-escaped for the SOAP body.
+        let didl = format!(
+            r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="1"><dc:title>breadcast</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:application/vnd.apple.mpegurl:*">{escaped}</res></item></DIDL-Lite>"#
+        );
+        let metadata = xml_escape(&didl);
         let set_uri_payload = format!(
-            "<InstanceID>0</InstanceID><CurrentURI>{escaped}</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>"
+            "<InstanceID>0</InstanceID><CurrentURI>{escaped}</CurrentURI><CurrentURIMetaData>{metadata}</CurrentURIMetaData>"
         );
         self.service
             .action(&self.device_url, "SetAVTransportURI", &set_uri_payload)
             .await
             .context("SetAVTransportURI failed")?;
 
-        self.service
+        // Some renderers auto-play after SetURI and then reject Play;
+        // others stay TRANSITIONING for a moment. Either PLAYING state is
+        // success.
+        match self
+            .service
             .action(&self.device_url, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
             .await
-            .context("Play failed")?;
+        {
+            Ok(_) => {}
+            Err(e) => {
+                if self.transport_state().await.ok().as_deref() != Some("PLAYING") {
+                    return Err(e).context("Play failed");
+                }
+            }
+        }
 
         Ok(())
     }
@@ -106,7 +124,7 @@ impl DlnaSession {
     }
 }
 
-fn xml_escape(input: &str) -> String {
+pub(crate) fn xml_escape(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for c in input.chars() {
         match c {
@@ -119,4 +137,15 @@ fn xml_escape(input: &str) -> String {
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xml_escape;
+
+    #[test]
+    fn xml_escape_covers_the_five_markup_chars() {
+        assert_eq!(xml_escape(r#"a&b<c>d"e'f"#), "a&amp;b&lt;c&gt;d&quot;e&apos;f");
+        assert_eq!(xml_escape("http://10.0.0.1:1/t/playlist.m3u8"), "http://10.0.0.1:1/t/playlist.m3u8");
+    }
 }

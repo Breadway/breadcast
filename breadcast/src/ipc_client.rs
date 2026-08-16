@@ -29,6 +29,8 @@ impl IpcClient {
         let path = socket_path()?;
         let write_half = UnixStream::connect(&path)
             .with_context(|| format!("failed to connect to breadcastd at {} — is it running?", path.display()))?;
+        // A wedged daemon must not freeze the GTK main thread on write.
+        let _ = write_half.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         let read_half = write_half.try_clone().context("failed to duplicate the IPC socket handle")?;
 
         let (tx, rx) = mpsc::channel();

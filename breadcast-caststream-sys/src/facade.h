@@ -88,15 +88,18 @@ void breadcast_caststream_sender_on_message(CastStreamSender* sender,
                                             const char* message,
                                             size_t message_len);
 
-// Enqueues one encoded video access unit (Annex-B H.264) for sending.
-// `data` is copied before this returns, so the caller may reuse/free its
-// buffer immediately after. `capture_time_us` is only used to derive the
-// RTP timestamp's relative spacing between frames (it does not need to be
-// wall-clock-accurate, just monotonically increasing and proportional to
-// real elapsed time between frames). Returns 0 if queued, nonzero if the
-// session isn't negotiated yet or the frame was rejected (e.g. too large,
-// or the in-flight queue is full -- the caller should back off encoding
-// when this happens rather than treating it as fatal).
+// Posts one encoded video access unit (Annex-B H.264) onto openscreen's
+// TaskRunner for sending. `data` is copied before this returns, so the
+// caller may reuse/free its buffer immediately after. `capture_time_us` is
+// only used to derive the RTP timestamp's relative spacing between frames
+// (it does not need to be wall-clock-accurate, just monotonically
+// increasing and proportional to real elapsed time between frames).
+//
+// Returns 0 if the frame was *posted* (not necessarily accepted --
+// Sender::EnqueueFrame runs later on the TaskRunner and may still reject
+// it), or nonzero if the session isn't negotiated yet / is shutting down.
+// Accept/reject outcomes are visible only via take_stats() and, for
+// dropped frames that break the H.264 reference chain, needs_key_frame().
 int32_t breadcast_caststream_sender_enqueue_frame(CastStreamSender* sender,
                                                   const uint8_t* data,
                                                   size_t data_len,

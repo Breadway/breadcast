@@ -1,7 +1,9 @@
 name = "breadcast"
 description = "Cast your screen to any Chromecast/Google TV or DLNA renderer — daemon + GTK4 popup"
 binaries = ["breadcast", "breadcastd"]
-# gst-plugin-va: the `vah264enc` element both encode pipelines use (see
+# gst-plugins-base: videoconvert/videoscale/videorate/appsink -- the
+# `gstreamer` package is only the core library. gst-plugin-va: the
+# `vah264enc` element both encode pipelines use (see
 # breadcast-core/src/pipeline/mod.rs) -- a separate Arch package from
 # gst-plugins-bad itself, not bundled into it. jsoncpp/openssl: runtime
 # shared-library deps of breadcastd itself (not just a build dep of
@@ -14,6 +16,7 @@ system_deps = [
     "gtk4",
     "gtk4-layer-shell",
     "gstreamer",
+    "gst-plugins-base",
     "gst-plugin-pipewire",
     "gst-plugins-bad",
     "gst-plugin-hlssink3",
