@@ -97,9 +97,16 @@ impl ActiveSession {
     }
 }
 
-/// `host` strings come straight from mDNS resolution, so this just checks
-/// the address, not whether a zone id is attached (mDNS never gives us one).
+/// `host` strings come straight from mDNS resolution, and mdns-sd renders a
+/// link-local IPv6 it resolved via `ScopedIp` with a `%zone` suffix (e.g.
+/// `fe80::…%wlan0`) so the address stays connectable. `IpAddr` can't parse
+/// that suffix (std rejects zone-ids in `FromStr`), so the zone has to be
+/// stripped before the network prefix can be examined -- otherwise a scoped
+/// `fe80::…%iface` host would fail this check and, in `CastDeviceFound`, be
+/// allowed to clobber a good routable host that `rust_cast` could actually
+/// connect to.
 fn is_link_local_v6(host: &str) -> bool {
+    let host = host.split('%').next().unwrap_or(host);
     matches!(host.parse::<std::net::IpAddr>(), Ok(std::net::IpAddr::V6(v6)) if (v6.segments()[0] & 0xffc0) == 0xfe80)
 }
 
@@ -177,6 +184,23 @@ impl Daemon {
                     self.state = StateInfo::Idle;
                     self.broadcast_state();
                     bread_events::emit_mirroring_stopped(&self.bread_client);
+                    return;
+                }
+                // No installed session, but a start is currently in flight
+                // (portal picker / OFFER-ANSWER). The event pump only reports
+                // SessionEnded once negotiation succeeded, so a matching
+                // generation here means the in-flight session died between
+                // `Negotiated` and `StartFinished` landing. If we ignore it,
+                // the pending `StartFinished` would install the dead session
+                // and leave the UI stuck on "Casting" until the frame pump
+                // happens to notice. Invalidate the pending start exactly as
+                // `StopCast` does -- bump the generation so
+                // `on_start_finished` tears the session down instead of
+                // installing it.
+                if self.starting {
+                    tracing::debug!("in-flight mirror session ended before it was installed");
+                    self.starting = false;
+                    self.start_generation = self.start_generation.wrapping_add(1);
                 }
             }
             DaemonCommand::StartFinished { generation, outcome, reply } => {
@@ -334,5 +358,161 @@ impl Daemon {
     fn broadcast_devices(&self) {
         let data = serde_json::to_value(self.device_list()).expect("Vec<DeviceInfo> always serializes");
         let _ = self.events_tx.send(ServerMessage::Event { event: "device_list_changed".to_string(), data });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use bread_utils::bread_client::BreadClient;
+    use tokio::sync::{broadcast, mpsc, oneshot};
+
+    use super::*;
+
+    /// A daemon parked mid-`StartCast`: `starting` is set and a concrete
+    /// generation is outstanding, but no `StartFinished` has landed yet.
+    /// This is exactly the window both races below target -- the portal
+    /// picker / OFFER/ANSWER negotiation is still running off the actor,
+    /// and the session that `StartFinished` would install is not installed.
+    ///
+    /// A real `MirrorSession` can't be built in a unit test (it needs the
+    /// portal capture session, a GStreamer encode pipeline, and a live
+    /// renderer on the LAN), so the `Stale StartFinished` probes below use
+    /// an `Err(StartFailed)` outcome. That still exercises the whole point
+    /// of the guard: `on_start_finished` checks `generation`/`starting`
+    /// *before* branching on the outcome, so the stale event is rejected
+    /// with "start cancelled", never installs a session, and the UI stays
+    /// `Idle`. The `Ok` branch of that same guard calls
+    /// `started.session.stop()` to tear the dead session down -- the literal
+    /// teardown line -- which is the only part not separately asserted here.
+    fn daemon_with_in_flight_start(generation: u64) -> (Daemon, broadcast::Receiver<ServerMessage>) {
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let (self_tx, _self_rx) = mpsc::channel(16);
+        let daemon = Daemon {
+            cast_devices: HashMap::new(),
+            dlna_devices: HashMap::new(),
+            state: StateInfo::Idle,
+            active_session: None,
+            starting: true,
+            start_generation: generation,
+            events_tx,
+            bread_client: BreadClient::connect("daemon-test"),
+            self_tx,
+        };
+        (daemon, events_rx)
+    }
+
+    /// A `StartFinished` carrying the *dead* session's generation -- the
+    /// probe both race tests replay after invalidating the in-flight start,
+    /// to prove it can't sneak a session back in.
+    fn stale_start_finished(reply: oneshot::Sender<Result<(), String>>) -> DaemonCommand {
+        DaemonCommand::StartFinished {
+            generation: 7,
+            outcome: Err(StartFailed {
+                device_id: "living-room-tv".to_string(),
+                error: "negotiation failed".to_string(),
+            }),
+            reply,
+        }
+    }
+
+    #[test]
+    fn link_local_v6_is_detected_with_and_without_a_zone() {
+        // Scoped form: mdns-sd's ScopedIp Display renders link-local IPv6 as
+        // `fe80::…%<iface>`, and IpAddr can't parse the `%` suffix -- this is
+        // the exact form the daemon-clobber bug shipped with.
+        assert!(is_link_local_v6("fe80::1234%wlan0"));
+        assert!(is_link_local_v6("fe80::1234%3"));
+        // Unscoped (bare)`fe80::…` also matches.
+        assert!(is_link_local_v6("fe80::1234"));
+    }
+
+    #[test]
+    fn non_link_local_addresses_are_not_marked_link_local() {
+        assert!(!is_link_local_v6("fe80"));
+        assert!(!is_link_local_v6("192.168.1.50"));
+        assert!(!is_link_local_v6("fd00::1"));       // ULA
+        assert!(!is_link_local_v6("2606:4700::1111")); // public
+        assert!(!is_link_local_v6("2606:4700::1111%wlan0")); // public + spurious zone
+        assert!(!is_link_local_v6("not-an-ip"));
+    }
+
+    /// The session's event pump reports death (`SessionEnded`) *between*
+    /// negotiation succeeding and `StartFinished` landing -- the exact race
+    /// that used to install the already-dead session and leave the UI stuck
+    /// on "Casting" until the frame pump happened to notice.
+    #[tokio::test]
+    async fn session_ended_during_an_in_flight_start_invalidates_the_pending_start() {
+        let (mut daemon, mut events_rx) = daemon_with_in_flight_start(7);
+
+        daemon.handle(DaemonCommand::SessionEnded { generation: 7 }).await;
+
+        // Invalidate the pending start exactly as StopCast does: clear
+        // `starting` and bump the generation so on_start_finished tears the
+        // dead session down instead of installing it.
+        assert!(!daemon.starting, "in-flight start must be cancelled");
+        assert_eq!(daemon.start_generation, 8);
+        assert!(daemon.active_session.is_none());
+        assert!(matches!(daemon.state, StateInfo::Idle));
+
+        // The stale StartFinished from the dead session must not install it,
+        // and the caller must hear that the start was cancelled.
+        let (reply, reply_rx) = oneshot::channel();
+        daemon.handle(stale_start_finished(reply)).await;
+
+        assert_eq!(reply_rx.await.unwrap(), Err("start cancelled".to_string()));
+        assert!(daemon.active_session.is_none(), "dead session must not be installed");
+        assert!(matches!(daemon.state, StateInfo::Idle), "UI must return to / stay Idle");
+
+        // A cancelled in-flight start broadcasts nothing -- no bogus
+        // state_changed to a UI that is already Idle.
+        assert!(events_rx.try_recv().is_err());
+    }
+
+    /// `StopCast` while the portal/negotiation is still running must cancel
+    /// the in-flight start, so its eventual `StartFinished` is rejected
+    /// rather than installing a session the user just explicitly stopped.
+    #[tokio::test]
+    async fn stop_cast_cancels_an_in_flight_start() {
+        let (mut daemon, mut events_rx) = daemon_with_in_flight_start(7);
+
+        let (reply, reply_rx) = oneshot::channel();
+        daemon.handle(DaemonCommand::StopCast { reply }).await;
+
+        // StopCast still resolves Ok -- there was nothing installed to stop,
+        // only a start to cancel.
+        assert!(reply_rx.await.unwrap().is_ok());
+        assert!(!daemon.starting, "StopCast must cancel the in-flight start");
+        assert_eq!(daemon.start_generation, 8);
+        assert!(daemon.active_session.is_none());
+        assert!(matches!(daemon.state, StateInfo::Idle));
+
+        // A late StartFinished from the cancelled start never installs.
+        let (reply, reply_rx) = oneshot::channel();
+        daemon.handle(stale_start_finished(reply)).await;
+        assert_eq!(reply_rx.await.unwrap(), Err("start cancelled".to_string()));
+        assert!(daemon.active_session.is_none(), "cancelled start must not install a session");
+        assert!(matches!(daemon.state, StateInfo::Idle));
+
+        // StopCast itself broadcast the transition back to Idle.
+        assert!(events_rx.try_recv().is_ok());
+    }
+
+    /// Defensive: a `SessionEnded` whose generation no longer matches (a
+    /// late notification from an already-stopped or already-cancelled
+    /// session) must be ignored without touching the current generation, so
+    /// it can't confuse a brand-new later start.
+    #[tokio::test]
+    async fn a_stale_session_ended_while_idle_is_ignored_without_bumping_generation() {
+        let (mut daemon, _events_rx) = daemon_with_in_flight_start(0);
+        daemon.starting = false; // not starting -- the stale event's own forerunner already finished
+
+        daemon.handle(DaemonCommand::SessionEnded { generation: 99 }).await;
+
+        assert!(!daemon.starting);
+        assert_eq!(daemon.start_generation, 0, "stale SessionEnded must not bump a future start's generation");
+        assert!(daemon.active_session.is_none());
+        assert!(matches!(daemon.state, StateInfo::Idle));
     }
 }

@@ -55,7 +55,26 @@ fn pick_lan_ip(peer: Option<IpAddr>) -> Result<IpAddr> {
         .context("no LAN-reachable IPv4 address found (excluding loopback/VPN/virtual interfaces) — is this machine connected to a network?")
 }
 
+/// Enumerates this machine's private, LAN-reachable IPv4 addresses as
+/// `(interface, address, prefix-len)` tuples. Primary path parses `ip -o
+/// addr show` -- the formatting it relies on is stable, and it bakes in the
+/// `scope global up` filter (excluding link-local 169.254/16 and down
+/// interfaces) for free -- falling back to a `getifaddrs`-based enumeration
+/// (`if-addrs`, already in the dependency tree via `mdns-sd`) when the `ip`
+/// command is unavailable, so the LAN-IP discovery doesn't silently depend on
+/// iproute2 being installed.
 fn lan_ipv4_candidates() -> Result<Vec<(String, Ipv4Addr, u8)>> {
+    match ip_command_candidates() {
+        Ok(candidates) if !candidates.is_empty() => return Ok(candidates),
+        Ok(_) => {} // `ip` ran but found no private address -- genuine, fall through
+        Err(e) => {
+            tracing::debug!(error = ?e, "`ip addr show` unavailable, falling back to getifaddrs");
+        }
+    }
+    getifaddrs_candidates()
+}
+
+fn ip_command_candidates() -> Result<Vec<(String, Ipv4Addr, u8)>> {
     let output = std::process::Command::new("ip")
         .args(["-4", "-o", "addr", "show", "scope", "global", "up"])
         .output()
@@ -85,6 +104,30 @@ fn lan_ipv4_candidates() -> Result<Vec<(String, Ipv4Addr, u8)>> {
             continue;
         }
         candidates.push((iface.to_string(), addr, prefix.min(32)));
+    }
+    Ok(candidates)
+}
+
+/// `getifaddrs`-based counterpart to [`ip_command_candidates`], mirroring the
+/// `ip` path's filters (up, non-loopback, private, not link-local, not an
+/// excluded interface name) so the two produce equivalent candidate sets.
+fn getifaddrs_candidates() -> Result<Vec<(String, Ipv4Addr, u8)>> {
+    let ifaces = if_addrs::get_if_addrs().context("failed to enumerate network interfaces (getifaddrs fallback)")?;
+    let mut candidates: Vec<(String, Ipv4Addr, u8)> = Vec::new();
+    for iface in ifaces {
+        if EXCLUDED_PREFIXES.iter().any(|p| iface.name.starts_with(p)) {
+            continue;
+        }
+        if !iface.is_oper_up() {
+            continue;
+        }
+        let if_addrs::IfAddr::V4(v4) = iface.addr else { continue };
+        // Mirrors `type(-4 -o addr show scope global up)`: drop loopback,
+        // link-local (169.254) and non-private networks.
+        if v4.ip.is_loopback() || v4.ip.is_link_local() || !v4.ip.is_private() {
+            continue;
+        }
+        candidates.push((iface.name.clone(), v4.ip, v4.prefixlen.min(32)));
     }
     Ok(candidates)
 }

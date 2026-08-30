@@ -187,6 +187,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
+ "if-addrs 0.15.0",
  "mdns-sd",
  "rupnp",
  "rust_cast",

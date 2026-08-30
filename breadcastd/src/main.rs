@@ -73,8 +73,17 @@ async fn main() -> anyhow::Result<()> {
                             tracing::info!(?device, "Cast device found");
                             bread_events::emit_device_found(&bread_client, &device.id, &device.name, &device.model, "cast");
                             known_cast_devices.insert(device.id.clone(), device.clone());
+                            // Forward only on an actual change. The daemon
+                            // actor is single-threaded and `Found` fires on
+                            // every mDNS re-resolution (per address, per
+                            // re-browse), so forwarding identical devices too
+                            // would spam `device_list_changed` broadcasts and
+                            // delay `list_devices`/`start_cast` replies that
+                            // share the same actor queue. The daemon's own
+                            // `CastDeviceLost`→refind logic still works, since
+                            // a loss is a state change on its side too.
+                            let _ = daemon_tx.send(DaemonCommand::CastDeviceFound(device)).await;
                         }
-                        let _ = daemon_tx.send(DaemonCommand::CastDeviceFound(device)).await;
                     }
                     Some(DiscoveryEvent::Lost { id }) => {
                         tracing::info!(%id, "Cast device lost");
@@ -99,8 +108,12 @@ async fn main() -> anyhow::Result<()> {
                             tracing::info!(?device, "DLNA device found");
                             bread_events::emit_device_found(&bread_client, &device.url, &device.friendly_name, "DLNA renderer", "dlna");
                             known_dlna_devices.insert(device.url.clone(), device.clone());
+                            // Same rationale as the Cast arm above: each SSDP
+                            // poll only reports devices it *this* poll
+                            // confirmed, but a device re-confirmed unchanged
+                            // needs no daemon flush.
+                            let _ = daemon_tx.send(DaemonCommand::DlnaDeviceFound(device)).await;
                         }
-                        let _ = daemon_tx.send(DaemonCommand::DlnaDeviceFound(device)).await;
                     }
                     Some(DlnaDiscoveryEvent::Lost { url }) => {
                         tracing::info!(%url, "DLNA device lost");

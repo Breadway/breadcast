@@ -21,6 +21,10 @@ gstreamer-video = "0.25"
 tiny_http = "0.12"
 rupnp = "3.0.0"
 futures-util = "0.3.33"
+# Fallback LAN-IP enumeration used only when the `ip` command is unavailable
+# (net.rs) -- already a transitive dep via mdns-sd, so this adds no new crate
+# to the build.
+if-addrs = "0.15"
 breadcast-caststream-sys = { path = "../breadcast-caststream-sys" }
 
 [dev-dependencies]

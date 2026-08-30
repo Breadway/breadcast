@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rupnp::Service;
+use std::time::Duration;
 
 use super::device::DlnaDevice;
 use super::AV_TRANSPORT;
@@ -81,8 +82,22 @@ impl DlnaSession {
         {
             Ok(_) => {}
             Err(e) => {
-                if self.transport_state().await.ok().as_deref() != Some("PLAYING") {
-                    return Err(e).context("Play failed");
+                // The renderer may already be auto-playing after SetURI (and
+                // reject a redundant Play), or may still be TRANSITIONING and
+                // only reach PLAYING a moment later -- either is success.
+                // A single immediate GetTransportInfo isn't enough for the
+                // latter, so give it a short bounded window before giving up
+                // on the Play error.
+                let mut attempts = 0u32;
+                loop {
+                    if self.transport_state().await.ok().as_deref() == Some("PLAYING") {
+                        break;
+                    }
+                    attempts += 1;
+                    if attempts >= 5 {
+                        return Err(e).context("Play failed");
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
         }

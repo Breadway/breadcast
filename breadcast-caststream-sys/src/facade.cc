@@ -465,6 +465,9 @@ int32_t breadcast_caststream_sender_needs_key_frame(CastStreamSender* sender) {
 }
 
 int32_t breadcast_caststream_sender_estimated_bandwidth_bps(CastStreamSender* sender) {
+  if (!sender) {
+    return 0;
+  }
   return sender->estimated_bandwidth_bps.load(std::memory_order_relaxed);
 }
 

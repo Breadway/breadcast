@@ -132,12 +132,30 @@ fn random_token() -> String {
         .is_ok();
     if !read_ok {
         // Unreachable in practice on Linux, but better than a zero-entropy
-        // token if it ever happened.
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::time::SystemTime::now().hash(&mut hasher);
-        std::process::id().hash(&mut hasher);
-        bytes[..8].copy_from_slice(&hasher.finish().to_le_bytes());
+        // token if it ever happened. Mix several low-cost, not-directly-
+        // foreseeable sources (two time reads a hair apart, pid, a process
+        // counter) into both hashes and write all 16 bytes, so the fallback
+        // never reduces to a single low-resolution clock tick or per-pid
+        // reuse -- still far weaker than /dev/urandom, which is why it stays
+        // a fallback, but not trivially guessable.
+        let mix = |salt: u64| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::time::SystemTime::now().hash(&mut hasher);
+            std::time::SystemTime::UNIX_EPOCH
+                .elapsed()
+                .ok()
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+                .hash(&mut hasher);
+            std::process::id().hash(&mut hasher);
+            salt.hash(&mut hasher);
+            hasher.finish()
+        };
+        let a = mix(0x9e3779b97f4a7c15);
+        let b = mix(0xdead_beef_dead_beef);
+        bytes[..8].copy_from_slice(&a.to_le_bytes());
+        bytes[8..].copy_from_slice(&b.to_le_bytes());
     }
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
