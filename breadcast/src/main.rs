@@ -40,7 +40,11 @@ fn build_ui(app: &Application) {
     bread_theme::gtk::apply_app_css(|| css::build_css(&load_palette()));
 
     let window = bread_utils::gtk_popup::new_overlay_window(app, "breadcast");
-    bread_theme::gtk::bind_window_auto(&window);
+    // Per-output app CSS: the shared sheet alone follows the monitor, but
+    // `css::build_css` inlines palette hexes, so app-specific chrome needs
+    // the per-output palette too. `apply_app_css` above stays as the
+    // display-level / SIGHUP fallback.
+    bread_theme::gtk::bind_window_auto_with_app_css(&window, css::build_css);
 
     let panel = GBox::new(Orientation::Vertical, 8);
     panel.add_css_class("cast-panel");
