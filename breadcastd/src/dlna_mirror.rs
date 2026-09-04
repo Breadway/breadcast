@@ -44,6 +44,13 @@ pub struct DlnaMirrorSession {
     output_dir: std::path::PathBuf,
     poll_task: tokio::task::JoinHandle<()>,
     stall_task: tokio::task::JoinHandle<()>,
+    /// The GStreamer bus-watcher thread (see `start`'s doc comment on it).
+    /// Stored and joined (bounded) in `stop()`, the same way
+    /// `CastMirrorSession` stores and joins `frame_pump` -- without this,
+    /// `stop()` could return before the thread noticed the pipeline reached
+    /// `Null` and sent its `SessionEnded`, leaving that send racing an
+    /// arbitrary amount of time past `stop()`'s return (CAST-4).
+    bus_watcher: std::thread::JoinHandle<()>,
 }
 
 impl DlnaMirrorSession {
@@ -187,7 +194,7 @@ impl DlnaMirrorSession {
         // Portal "stop sharing" / a real GStreamer error used to only log
         // -- the bus watcher never told the daemon, so the UI stayed on
         // Casting and the renderer kept looping stale segments. Notify.
-        {
+        let bus_watcher = {
             let pipeline_watch = pipeline.clone();
             let daemon_tx = daemon_tx.clone();
             std::thread::spawn(move || {
@@ -196,8 +203,8 @@ impl DlnaMirrorSession {
                     Err(e) => tracing::error!(error = ?e, "DLNA encode pipeline error"),
                 }
                 let _ = daemon_tx.blocking_send(DaemonCommand::SessionEnded { generation });
-            });
-        }
+            })
+        };
 
         Ok(Self {
             pipeline,
@@ -207,6 +214,7 @@ impl DlnaMirrorSession {
             output_dir,
             poll_task,
             stall_task,
+            bus_watcher,
         })
     }
 
@@ -226,6 +234,19 @@ impl DlnaMirrorSession {
         }
         if let Err(e) = self.pipeline.set_state(gst::State::Null) {
             tracing::warn!(error = ?e, "failed to stop the encode pipeline cleanly");
+        }
+        // The bus watcher blocks in `run_until_eos_or_error` until EOS,
+        // a bus error, or the pipeline reaches `Null` -- the state change
+        // just above unblocks it, so this join should return almost
+        // immediately. Bounded the same way `CastMirrorSession::stop`
+        // bounds its `frame_pump` join (`cast_mirror.rs`'s `join_pump`):
+        // joining here, before `stop()` returns, guarantees the thread has
+        // finished (and sent its `SessionEnded`, if any) rather than racing
+        // an unbounded amount of time past `stop()`'s return (CAST-4).
+        match tokio::time::timeout(Duration::from_secs(5), tokio::task::spawn_blocking(move || self.bus_watcher.join())).await {
+            Ok(Err(panic)) => tracing::warn!(error = ?panic, "DLNA bus watcher join task panicked"),
+            Err(_) => tracing::warn!("DLNA bus watcher thread did not exit within 5s -- abandoning it"),
+            Ok(Ok(_)) => {}
         }
         self.http.shutdown();
         if let Some(capture) = self.capture.take() {
