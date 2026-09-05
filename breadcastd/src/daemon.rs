@@ -86,6 +86,14 @@ pub fn spawn(events_tx: broadcast::Sender<ServerMessage>, bread_client: BreadCli
 pub(crate) enum ActiveSession {
     Cast(CastMirrorSession),
     Dlna(Box<DlnaMirrorSession>),
+    /// A real `CastMirrorSession`/`DlnaMirrorSession` needs a portal
+    /// capture session, a GStreamer encode pipeline, and (for `Cast`) a
+    /// live receiver on the LAN, so it can't be built in a unit test (see
+    /// the `#[cfg(test)] mod tests` doc comment below). This stub stands in
+    /// for "a session is installed" wherever a test needs `active_session`
+    /// to be `Some` without any of that -- `stop()` is a no-op.
+    #[cfg(test)]
+    Stub,
 }
 
 impl ActiveSession {
@@ -93,6 +101,8 @@ impl ActiveSession {
         match self {
             ActiveSession::Cast(session) => session.stop().await,
             ActiveSession::Dlna(session) => session.stop().await,
+            #[cfg(test)]
+            ActiveSession::Stub => {}
         }
     }
 }
@@ -157,6 +167,18 @@ impl Daemon {
                 }
                 if let Some(session) = self.active_session.take() {
                     session.stop().await;
+                    // Bump the generation here too, exactly as the
+                    // SessionEnded handler below already does when a
+                    // session ends on its own. Without this, a stop of an
+                    // *installed* session (as opposed to an in-flight
+                    // start) left `start_generation` unchanged, so a late
+                    // `SessionEnded` from this session's own background
+                    // thread/task -- sent after `stop()` already returned,
+                    // e.g. DLNA's bus-watcher thread, which isn't joined
+                    // before `stop()` returns -- could match whatever gets
+                    // started next and wrongly cancel or tear it down
+                    // (CAST-4).
+                    self.start_generation = self.start_generation.wrapping_add(1);
                     bread_events::emit_mirroring_stopped(&self.bread_client);
                 }
                 self.state = StateInfo::Idle;
@@ -403,6 +425,35 @@ mod tests {
         (daemon, events_rx)
     }
 
+    /// A daemon with a session already installed (the normal "actively
+    /// casting" state) at the given generation -- as opposed to
+    /// `daemon_with_in_flight_start`, which is mid-`StartCast` with nothing
+    /// installed yet. Used by the `StopCast`-on-an-installed-session race
+    /// below (CAST-4): unlike the in-flight-start races, this path takes
+    /// `active_session`, so it needs a real `Some(ActiveSession)` --
+    /// `ActiveSession::Stub` stands in for the real session (see its doc
+    /// comment).
+    fn daemon_with_installed_session(generation: u64) -> (Daemon, broadcast::Receiver<ServerMessage>) {
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let (self_tx, _self_rx) = mpsc::channel(16);
+        let daemon = Daemon {
+            cast_devices: HashMap::new(),
+            dlna_devices: HashMap::new(),
+            state: StateInfo::Casting {
+                device_id: "living-room-tv".to_string(),
+                device_name: "Living Room TV".to_string(),
+                protocol: Protocol::Dlna,
+            },
+            active_session: Some(ActiveSession::Stub),
+            starting: false,
+            start_generation: generation,
+            events_tx,
+            bread_client: BreadClient::connect("daemon-test"),
+            self_tx,
+        };
+        (daemon, events_rx)
+    }
+
     /// A `StartFinished` carrying the *dead* session's generation -- the
     /// probe both race tests replay after invalidating the in-flight start,
     /// to prove it can't sneak a session back in.
@@ -514,5 +565,66 @@ mod tests {
         assert_eq!(daemon.start_generation, 0, "stale SessionEnded must not bump a future start's generation");
         assert!(daemon.active_session.is_none());
         assert!(matches!(daemon.state, StateInfo::Idle));
+    }
+
+    /// CAST-4 regression. `StopCast` on an *installed* session (the normal
+    /// "user clicks Stop" path, as opposed to cancelling an in-flight
+    /// start) must bump `start_generation` exactly as the `SessionEnded`
+    /// handler already does when a session ends on its own -- otherwise a
+    /// stop -> start sequence keeps the same generation throughout, and a
+    /// late `SessionEnded` from the *stopped* session's own background
+    /// thread/task (e.g. DLNA's bus-watcher thread, which used to not be
+    /// joined before `stop()` returned, so it could fire an unbounded time
+    /// later) is indistinguishable from a legitimate event about whatever
+    /// gets started next.
+    ///
+    /// This drives the race through `Daemon::handle` directly with a
+    /// deterministic sequence of commands -- no real session, thread, or
+    /// timing is involved, so there's nothing to make flaky.
+    #[tokio::test]
+    async fn stop_cast_on_an_installed_session_bumps_generation_so_a_stale_watcher_thread_cannot_kill_the_next_session() {
+        let (mut daemon, _events_rx) = daemon_with_installed_session(7);
+
+        let (reply, reply_rx) = oneshot::channel();
+        daemon.handle(DaemonCommand::StopCast { reply }).await;
+
+        assert!(reply_rx.await.unwrap().is_ok());
+        assert!(daemon.active_session.is_none());
+        assert_eq!(
+            daemon.start_generation, 8,
+            "StopCast must bump the generation when it tears down an installed session, not just an in-flight start"
+        );
+        assert!(matches!(daemon.state, StateInfo::Idle));
+
+        // A new session starts and gets installed under the new
+        // generation -- simulating the "quick stop, then start again"
+        // sequence from the bug report.
+        daemon.active_session = Some(ActiveSession::Stub);
+        daemon.state = StateInfo::Casting {
+            device_id: "bedroom-tv".to_string(),
+            device_name: "Bedroom TV".to_string(),
+            protocol: Protocol::Dlna,
+        };
+
+        // The OLD (just-stopped) session's bus-watcher thread only now
+        // delivers its SessionEnded. It captured generation 7 at spawn
+        // time, so it carries that stale generation no matter how late it
+        // arrives relative to stop() having already returned.
+        daemon.handle(DaemonCommand::SessionEnded { generation: 7 }).await;
+
+        // Before this fix, generation 7 still matched `start_generation`
+        // (StopCast never bumped it for an installed session), so this
+        // branch would have `active_session.take()`n the brand-new session
+        // and torn it down, flipping the UI back to Idle even though it
+        // had just started successfully mirroring.
+        assert!(
+            daemon.active_session.is_some(),
+            "the new session must survive a stale SessionEnded left over from the session that was just stopped"
+        );
+        assert!(
+            matches!(daemon.state, StateInfo::Casting { .. }),
+            "the UI must not be kicked back to Idle by a stale event about a superseded session"
+        );
+        assert_eq!(daemon.start_generation, 8, "a stale, non-matching SessionEnded must not itself bump the generation");
     }
 }
