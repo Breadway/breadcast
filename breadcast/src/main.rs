@@ -1,7 +1,7 @@
-//! breadcast — GTK4 layer-shell popup: a thin IPC client of `breadcastd`
+//! breadcast: GTK4 layer-shell popup, a thin IPC client of `breadcastd`
 //! (see `breadcast_core::ipc` for the wire protocol). Shows discovered Cast
 //! devices and start/stop controls; holds no pipeline or protocol code of
-//! its own — that all lives in `breadcastd`, so closing this popup never
+//! its own: that all lives in `breadcastd`, so closing this popup never
 //! interrupts an active cast.
 
 mod css;
@@ -184,7 +184,7 @@ fn build_ui(app: &Application) {
 
 /// Both a successful `"list_devices"`/`"get_state"` response and the
 /// corresponding pushed event carry the same JSON shape in `result`/`data`
-/// respectively — this normalizes both into one dispatch so there's only
+/// respectively; this normalizes both into one dispatch so there's only
 /// one device-list/state rendering path to keep in sync.
 fn handle_server_message(
     message: ServerMessage,

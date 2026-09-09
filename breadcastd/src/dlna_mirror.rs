@@ -2,11 +2,11 @@
 //! GStreamer HLS encode pipeline, the local HTTP server, and the
 //! `AVTransport` control session. This is `dlna_mirror_test.rs`'s
 //! orchestration, restructured into something the daemon can start and
-//! stop on demand — the DLNA counterpart to `cast_mirror.rs`'s
+//! stop on demand: the DLNA counterpart to `cast_mirror.rs`'s
 //! `CastMirrorSession`.
 //!
 //! Unlike the Cast Streaming path, there's no persistent bidirectional
-//! connection to a DLNA renderer to read events from — `AVTransport` is a
+//! connection to a DLNA renderer to read events from: `AVTransport` is a
 //! plain SOAP request/response protocol (see `DlnaSession`'s doc comment),
 //! so "did the renderer stop on its own" can only be *polled*, not pushed.
 
@@ -26,7 +26,7 @@ use crate::daemon::DaemonCommand;
 
 /// How often to poll `GetTransportInfo` for an unprompted stop (the user
 /// stopped playback from the TV's own remote, or the renderer just dropped
-/// the stream) — see [`DlnaSession::transport_state`]'s doc comment for why
+/// the stream); see [`DlnaSession::transport_state`]'s doc comment for why
 /// this is a poll, not a push.
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -60,7 +60,7 @@ impl DlnaMirrorSession {
     ///
     /// `daemon_tx` is used to report an unprompted session end (the
     /// renderer stopping playback on its own, a GStreamer error, or the
-    /// renderer becoming unreachable) back to the daemon actor — mirrors
+    /// renderer becoming unreachable) back to the daemon actor: mirrors
     /// `CastMirrorSession::start`'s same use of it.
     pub async fn start(
         device: DlnaDevice,

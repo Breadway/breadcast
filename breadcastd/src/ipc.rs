@@ -1,6 +1,6 @@
 //! breadcastd's private control socket: newline-delimited JSON over a
 //! `UnixListener` at `$XDG_RUNTIME_DIR/breadcast/breadcastd.sock`, separate
-//! from breadd's own pub/sub bus (`bread_events.rs`) — that's for external
+//! from breadd's own pub/sub bus (`bread_events.rs`); that's for external
 //! automation (a Hyprland keybind emitting `bread.command.cast.*`), this is
 //! for the `breadcast` GTK4 popup's actual live state, which needs pushed
 //! updates a best-effort pub/sub bus doesn't fit as naturally.

@@ -1,4 +1,4 @@
-//! `bread.cast.*` event integration — optional, non-blocking. See
+//! `bread.cast.*` event integration: optional, non-blocking. See
 //! `EVENTS.md` at the repo root for the full contract. breadcastd works
 //! identically with or without breadd running; every call here is
 //! fire-and-forget (`BreadClient::emit` never blocks or errors this
@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::daemon::DaemonCommand;
 
 /// This app's id in bread's sibling-app namespace registry
-/// (`bread_shared::apps::KNOWN_APPS`) — events publish as `bread.cast.*`,
+/// (`bread_shared::apps::KNOWN_APPS`); events publish as `bread.cast.*`,
 /// commands arrive on `bread.command.cast.*`.
 pub const APP_ID: &str = "cast";
 
@@ -54,14 +54,14 @@ pub fn emit_mirroring_failed(client: &BreadClient, device_id: &str, error: &str)
 
 /// Reacts to `bread.command.cast.*` verbs, e.g. from a Hyprland keybind.
 /// Runs on `BreadClient::subscribe`'s dedicated background thread (a plain
-/// `std::thread`, not a tokio worker) — `mpsc::Sender::blocking_send` is
+/// `std::thread`, not a tokio worker): `mpsc::Sender::blocking_send` is
 /// safe to call from here for exactly that reason, but would panic if
 /// called from inside the tokio runtime.
 ///
 /// Both verbs reply is intentionally not awaited: the reply channel exists
 /// because `DaemonCommand::StartCast`/`StopCast` need one for the IPC
 /// socket's request/response use (see `ipc.rs`), but a fire-and-forget bus
-/// command has nowhere to deliver a reply to anyway — the outcome shows up
+/// command has nowhere to deliver a reply to anyway; the outcome shows up
 /// as a `bread.cast.mirroring_started`/`.failed`/`.stopped` event instead
 /// (see `daemon.rs`'s `start_cast`/`StopCast` handling).
 pub fn handle_command(event: &BreadEvent, daemon_tx: &mpsc::Sender<DaemonCommand>) {

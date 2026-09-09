@@ -1,6 +1,6 @@
 use bread_theme::Palette;
 
-/// Plain GTK4 CSS (not libadwaita) — matches `bos-settings`'/`breadclip`'s
+/// Plain GTK4 CSS (not libadwaita): matches `bos-settings`'/`breadclip`'s
 /// precedent: libadwaita rows can't be width-constrained from outside a
 /// fixed-width popup panel the way a plain `ListBoxRow` can.
 pub fn build_css(palette: &Palette) -> String {

@@ -1,5 +1,5 @@
 //! Message shapes for breadcastd's private control socket
-//! (`$XDG_RUNTIME_DIR/breadcast/breadcastd.sock`, newline-delimited JSON) —
+//! (`$XDG_RUNTIME_DIR/breadcast/breadcastd.sock`, newline-delimited JSON):
 //! shared between `breadcastd` (which serves them) and `breadcast` (the
 //! GTK4 popup, which is the only client) so the two never drift out of
 //! sync with each other. See `breadcastd/src/ipc.rs` for the actual
@@ -42,11 +42,11 @@ impl ServerMessage {
     }
 }
 
-/// Which casting protocol a [`DeviceInfo`]/[`StateInfo::Casting`] refers to
-/// — Cast V2/Cast Streaming ([`crate::cast_sender`]/[`crate::caststream`])
+/// Which casting protocol a [`DeviceInfo`]/[`StateInfo::Casting`] refers to:
+/// Cast V2/Cast Streaming ([`crate::cast_sender`]/[`crate::caststream`])
 /// or DLNA/UPnP AVTransport ([`crate::dlna`]). The two protocols discover
 /// disjoint device populations (see `dlna/mod.rs`'s doc comment), so a
-/// unified device list needs this to tell them apart — a Cast device id and
+/// unified device list needs this to tell them apart: a Cast device id and
 /// a DLNA device url share no namespace, but both are opaque strings to the
 /// GTK client, which otherwise has no way to know which `start_cast`
 /// dispatch path it's picking.
@@ -57,10 +57,10 @@ pub enum Protocol {
     Dlna,
 }
 
-/// A discovered device as reported by `"list_devices"`/`"device_list_changed"`
-/// — a protocol-agnostic projection of either a [`crate::CastDevice`] (`id`
+/// A discovered device as reported by `"list_devices"`/`"device_list_changed"`,
+/// a protocol-agnostic projection of either a [`crate::CastDevice`] (`id`
 /// is its mDNS id) or a [`crate::dlna::DlnaDevice`] (`id` is its description URL,
-/// the closest thing DLNA has to a stable identifier — see
+/// the closest thing DLNA has to a stable identifier; see
 /// `dlna/device.rs`'s doc comment on [`crate::dlna::DlnaDevice::url`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -70,7 +70,7 @@ pub struct DeviceInfo {
     pub protocol: Protocol,
 }
 
-/// The daemon's current activity — pushed as a `"state_changed"` event and
+/// The daemon's current activity: pushed as a `"state_changed"` event and
 /// returned by the `"get_state"` request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]

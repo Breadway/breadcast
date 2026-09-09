@@ -1,8 +1,8 @@
-//! breadcastd — background daemon: mDNS (Cast) and SSDP (DLNA) device
+//! breadcastd: background daemon, mDNS (Cast) and SSDP (DLNA) device
 //! discovery, both mirroring session lifecycles (Cast Streaming and
 //! DLNA/AVTransport), and a private IPC socket the `breadcast` GTK4 popup
 //! talks to. Also does optional breadd event integration for external
-//! automation (a Hyprland keybind, etc.) — see `bread_events.rs`; that's
+//! automation (a Hyprland keybind, etc.); see `bread_events.rs`; that's
 //! separate from (and does not replace) the IPC socket, since a popup UI
 //! needs live pushed state that a best-effort pub/sub bus doesn't fit as
 //! naturally. See `ipc.rs`'s doc comment.
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     // doc comments), not just the first sighting. Every event is forwarded
     // to the daemon actor unconditionally (its `HashMap` re-insert is a
     // harmless no-op for an unchanged device, aside from a redundant but
-    // cheap `device_list_changed` broadcast) — but `bread.cast.device_found`
+    // cheap `device_list_changed` broadcast), but `bread.cast.device_found`
     // on the breadd bus is gated on an actual *change*, so anything
     // subscribed there expecting "on device_found, do X" doesn't fire
     // repeatedly for the same device.
@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
                         let _ = daemon_tx.send(DaemonCommand::CastDeviceLost(id)).await;
                     }
                     // The mDNS browse thread itself ended (daemon shutdown,
-                    // an unrecoverable browse error) — that's Cast
+                    // an unrecoverable browse error): that's Cast
                     // discovery's one job gone, not a normal exit.
                     // Returning `Ok(())` from `main` here would exit 0, and
                     // systemd's `Restart=on-failure` would never trigger.

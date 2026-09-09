@@ -1,17 +1,17 @@
 //! Safe wrapper over `breadcast-caststream-sys`'s raw FFI to the vendored
-//! openscreen Cast Streaming sender — the same low-latency mirroring
+//! openscreen Cast Streaming sender: the same low-latency mirroring
 //! protocol Chrome's tab/desktop casting uses (unlike [`crate::cast_sender`]'s
 //! HLS approach, which targets the Default Media Receiver instead). See
 //! `breadcast-caststream-sys/vendor/openscreen/PATCHES.md` for how the
 //! vendored C++ this wraps was built.
 //!
 //! This does *not* replicate [`CastSession`](crate::cast_sender::CastSession)'s
-//! own single-io-thread actor pattern internally — the underlying C++ already
+//! own single-io-thread actor pattern internally: the underlying C++ already
 //! runs its own dedicated TaskRunner/networking threads (see `facade.h`'s
 //! threading contract), so every method here just marshals across FFI rather
 //! than through a Rust-owned loop. What *does* need a Rust-side thread is
 //! draining [`CastStreamEvents`] and forwarding [`CastStreamEvent::OutboundMessage`]
-//! over the existing CASTV2 connection — see `cast_stream_test.rs` for the
+//! over the existing CASTV2 connection; see `cast_stream_test.rs` for the
 //! intended pattern (pump events on one thread, call `on_message`/
 //! `enqueue_frame` from others).
 
@@ -28,7 +28,7 @@ use breadcast_caststream_sys::{
 };
 
 /// The Cast Streaming ("Mirroring") receiver app id, pre-installed on every
-/// Chromecast/Google TV — distinct from [`rust_cast::channels::receiver::CastDeviceApp::DefaultMediaReceiver`]'s
+/// Chromecast/Google TV: distinct from [`rust_cast::channels::receiver::CastDeviceApp::DefaultMediaReceiver`]'s
 /// `CC1AD845`, which is what [`crate::cast_sender::CastSession`] launches for
 /// the HLS path.
 pub const MIRRORING_APP_ID: &str = "0F5096E8";
@@ -91,7 +91,7 @@ impl Default for VideoParams {
     }
 }
 
-/// Events pushed from the underlying C++ TaskRunner thread — see this
+/// Events pushed from the underlying C++ TaskRunner thread; see this
 /// module's doc comment on why a Rust-owned pump loop is still needed even
 /// though the FFI layer runs its own threads.
 #[derive(Debug)]

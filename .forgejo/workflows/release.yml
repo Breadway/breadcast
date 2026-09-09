@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    # RC tags are `v*` too (`v0.1.1-rc.1`) — those belong on the beta
+    # RC tags are `v*` too (`v0.1.1-rc.1`); those belong on the beta
     # track, see beta-release.yml. A stable cut is a plain `vX.Y.Z`.
     if: ${{ !contains(github.ref_name, '-rc') }}
     runs-on: [self-hosted, hestia]

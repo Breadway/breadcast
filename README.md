@@ -3,16 +3,16 @@
 Cast your screen to a Chromecast, Google TV, or DLNA renderer on the LAN.
 Two binaries:
 
-- **`breadcastd`** — background daemon. Discovers Cast (mDNS) and DLNA/UPnP
+- **`breadcastd`**: background daemon. Discovers Cast (mDNS) and DLNA/UPnP
   (SSDP) devices, owns the portal screen-capture / encode pipeline, and
   runs the live session: Cast Streaming (vendored openscreen) or
   DLNA/AVTransport. One active session at a time.
-- **`breadcast`** — GTK4 Layer Shell popup. Thin IPC client of
+- **`breadcast`**: GTK4 Layer Shell popup. Thin IPC client of
   `breadcastd`: pick a device, start or stop a cast. Closing the popup
   does not interrupt an active session.
 
 This is a **bakery product**. It is **not** shipped on the BOS ISO and is
-**not** part of the default desktop — install it yourself if you want it.
+**not** part of the default desktop; install it yourself if you want it.
 
 ## Install
 
@@ -69,7 +69,7 @@ breadcast
 ```
 
 Running `breadcast` again while it is open closes it (toggle). Click a
-device to start mirroring — the portal picker asks which screen to share.
+device to start mirroring: the portal picker asks which screen to share.
 **Stop mirroring** ends the session. Status is Idle or Casting.
 
 Discovery examples (optional, for debugging the LAN):

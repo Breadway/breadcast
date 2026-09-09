@@ -17,14 +17,14 @@ use crate::caststream::VideoParams;
 /// `hlssink3` writes `segment%05d.ts` files and `playlist.m3u8` there.
 ///
 /// Idempotently calls `gst::init()` itself rather than requiring every
-/// caller to remember to — `gst::parse::launch` panics
+/// caller to remember to: `gst::parse::launch` panics
 /// (`assert_initialized_main_thread!()`) if GStreamer was never
 /// initialized, which every current caller happens to do first, but that's
 /// a footgun for a `pub` function once something other than a smoke-test
 /// example calls it (e.g. `breadcastd`).
 ///
 /// Uses a `gst::parse::launch` string rather than the typed element-builder
-/// API — this is the prototyping-first approach: get the pipeline shape
+/// API: this is the prototyping-first approach, get the pipeline shape
 /// right and provable against real hardware before hardening it into typed
 /// Rust with per-element error handling. Filesystem paths are deliberately
 /// *not* interpolated into that string, though: `output_dir` is caller
@@ -35,11 +35,11 @@ use crate::caststream::VideoParams;
 /// instead, which need no escaping at all.
 ///
 /// `vah264enc` (not the deprecated `vaapih264enc`) needs `gst-plugin-va`
-/// installed (`pacman -S gst-plugin-va`) — it's a separate Arch package
+/// installed (`pacman -S gst-plugin-va`); it's a separate Arch package
 /// from `gst-plugins-bad` itself, not bundled in. `hlssink3` similarly
 /// needs `gst-plugin-hlssink3`. `hlssink3` (not `hlscmafsink`) is
 /// deliberate: the Chromecast Default Media Receiver only plays classic
-/// MPEG-TS-segmented HLS, not fMP4/CMAF — and `hlssink3` does its own
+/// MPEG-TS-segmented HLS, not fMP4/CMAF; and `hlssink3` does its own
 /// internal MPEG-TS muxing per segment via its `video`/`audio` *request*
 /// pads, so no separate `mpegtsmux` element goes in front of it (confirmed
 /// via `gst-inspect-1.0 hlssink3`: its only pad templates are `video` and
@@ -55,15 +55,15 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
 
     // Capped to 1280x720@30 and H.264 Main profile: this machine's native
     // 1920x1200 at an uncapped framerate (observed via ffprobe as a
-    // nonsensical 120fps/240tbr — pipewiresrc doesn't cap the rate on its
+    // nonsensical 120fps/240tbr: pipewiresrc doesn't cap the rate on its
     // own) was confirmed via a real Chromecast to fetch fine over HTTP
     // (200s on the playlist and first segment) but then fail to actually
-    // play — consistent with exceeding what an older Chromecast's H.264
+    // play: consistent with exceeding what an older Chromecast's H.264
     // decoder profile/level supports, not a network/CORS/HLS-structure
     // problem. 720p30 Main is a conservative, broadly-compatible baseline;
     // revisit upward (1080p, High profile) once a specific device's real
     // ceiling is known. Note this ignores the source's 16:10 aspect ratio
-    // (stretches to 16:9) — correctness/compatibility first, an
+    // (stretches to 16:9): correctness/compatibility first, an
     // aspect-preserving scale (letterbox via `videoscale
     // add-borders=true`) is a follow-up, not a blocker.
     // HLS segment sizing is *the* dominant term in this path's end-to-end
@@ -120,7 +120,7 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
 }
 
 /// Builds (but doesn't start) the capture → encode → `appsink` pipeline used
-/// for low-latency Cast Streaming mirroring (see [`crate::caststream`]) —
+/// for low-latency Cast Streaming mirroring (see [`crate::caststream`]):
 /// the counterpart to [`build_video_pipeline`]'s HLS path, which the
 /// Chromecast Mirroring receiver can't play (it speaks RTP, not HLS).
 ///
@@ -128,17 +128,17 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
 /// feeding openscreen's `Sender::EnqueueFrame`, which wants standalone,
 /// receiver-decodable Annex-B access units, not a muxed container:
 /// - `h264parse config-interval=-1` re-inserts SPS/PPS before every key
-///   frame (not just once) — required since there's no container-level
+///   frame (not just once): required since there's no container-level
 ///   "here's the codec config" the receiver can fall back on, unlike HLS's
 ///   `.ts` segments.
 /// - An explicit `video/x-h264,stream-format=byte-stream,alignment=au` caps
-///   filter after `h264parse` — `vah264enc`'s default output is `avc`
+///   filter after `h264parse`: `vah264enc`'s default output is `avc`
 ///   (4-byte length-prefixed NAL units, the ISO/MP4 convention), but
 ///   RTP/Cast Streaming payloads need Annex-B (0x00 0x00 0x00 0x01 start
 ///   codes), the same format `h264parse` can produce but won't unless asked.
 /// - `appsink` instead of `hlssink3`: each pulled `gst::Sample` is one
 ///   complete access unit (`alignment=au`), ready to hand to
-///   `CastStreamSender::enqueue_frame` — see `cast_stream_test.rs` for the
+///   `CastStreamSender::enqueue_frame`; see `cast_stream_test.rs` for the
 ///   pull loop. `sync=false` since these are being forwarded over the
 ///   network as fast as produced, not paced against a clock for local
 ///   playback; `drop=true`/`max-buffers=4` bounds memory if the pull loop
@@ -146,7 +146,7 @@ pub fn build_video_pipeline(video_node_id: u32, output_dir: &Path) -> Result<gst
 ///
 /// Returns the pipeline plus its `appsink` and the `vah264enc` element (the
 /// latter so a caller can drive its `bitrate` property from
-/// `CastStreamSender::estimated_bandwidth_bps()` — see
+/// `CastStreamSender::estimated_bandwidth_bps()`; see
 /// [`request_key_frame`]/`set_video_bitrate_kbps` for the two knobs a
 /// congestion-control loop needs).
 /// Which capture-side memory path [`build_video_pipeline_for_streaming`] asks
@@ -515,7 +515,7 @@ pub fn set_video_bitrate_kbps(encoder: &gst::Element, kbps: u32) {
     encoder.set_property("bitrate", kbps);
 }
 
-/// Why [`run_until_error_or_timeout`] returned successfully — distinct from
+/// Why [`run_until_error_or_timeout`] returned successfully: distinct from
 /// each other because a caller (e.g. a UI reporting "mirroring stopped")
 /// needs to tell "the user hit Stop-sharing in the portal picker, EOS is
 /// expected" apart from "nothing happened for N seconds, which for a smoke
@@ -649,9 +649,9 @@ pub fn hls_output_dir(label: &str) -> Result<PathBuf> {
 
 /// Polls `playlist_path` until it contains at least `min_segments` `#EXTINF`
 /// entries or `timeout` elapses. Casting/loading a URL before the encode
-/// pipeline has actually produced any segments — which an earlier version
+/// pipeline has actually produced any segments, which an earlier version
 /// of this project's examples did unconditionally, via a fixed sleep
-/// regardless of whether encoding had actually started — hands the
+/// regardless of whether encoding had actually started, hands the
 /// receiver a 404 playlist and produces an unexplained load failure.
 pub async fn wait_for_playlist_segments(playlist_path: &Path, min_segments: usize, timeout: Duration) -> Result<()> {
     let deadline = tokio::time::Instant::now() + timeout;
@@ -663,7 +663,7 @@ pub async fn wait_for_playlist_segments(playlist_path: &Path, min_segments: usiz
         }
         if tokio::time::Instant::now() >= deadline {
             anyhow::bail!(
-                "HLS playlist at {} never accumulated {min_segments} segments within {timeout:?} — \
+                "HLS playlist at {} never accumulated {min_segments} segments within {timeout:?}: \
                  the encode pipeline may not be producing output (check for a GStreamer error above)",
                 playlist_path.display()
             );

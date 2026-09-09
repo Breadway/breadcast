@@ -20,12 +20,12 @@ const ADDRESS_STALE_AFTER: Duration = Duration::from_secs(300);
 /// first (works unambiguously with rust_cast's TLS connect and with URLs
 /// embedded in Cast media-load requests), falling back to a non-link-local
 /// IPv6 address. Link-local IPv6 (`fe80::...%wlan0`) is deliberately last
-/// resort — its zone-id suffix doesn't round-trip through `IpAddr`'s
+/// resort: its zone-id suffix doesn't round-trip through `IpAddr`'s
 /// `FromStr`/`Display`, so it can silently become unconnectable downstream.
 ///
 /// `addresses` is sorted most-recently-seen first (with a stable tie-break)
 /// before picking, rather than iterated in whatever order a `HashSet` (or a
-/// `Vec` built from one) happens to produce — with a device that resolves
+/// `Vec` built from one) happens to produce: with a device that resolves
 /// to two IPv4 addresses (e.g. wired + wireless, or a DHCP lease change),
 /// an unordered choice can silently pick a stale/unreachable one, and pick
 /// a *different* one across otherwise-identical runs.
@@ -62,7 +62,7 @@ const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
 ///
 /// `Found` fires on every mDNS re-resolution of a device (e.g. once per
 /// network interface, or periodically as records refresh), not just the
-/// first sighting — consumers should treat it as an upsert keyed by
+/// first sighting; consumers should treat it as an upsert keyed by
 /// `CastDevice::id`, not an append-only log.
 #[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
@@ -73,7 +73,7 @@ pub enum DiscoveryEvent {
 /// Browses `_googlecast._tcp.local.` on a background thread and forwards
 /// found/lost devices over an unbounded channel. Dropping the returned
 /// `Discovery` stops the underlying mDNS daemon (via an explicit `Drop`
-/// impl below — `mdns_sd::ServiceDaemon` has none of its own, so without
+/// impl below: `mdns_sd::ServiceDaemon` has none of its own, so without
 /// it every dropped `Discovery` would leak its daemon thread and 5353
 /// multicast socket for the rest of the process's life).
 pub struct Discovery {
@@ -112,7 +112,7 @@ impl Discovery {
             // arriving in a later event for the same fullname. Accumulating
             // (not replacing) means `pick_address` always chooses from
             // everything seen so far, not just whatever happened to be in
-            // the latest packet — the timestamp lets it also prefer the
+            // the latest packet; the timestamp lets it also prefer the
             // freshest address and ignore ones that have gone stale.
             let mut fullname_to_addrs: HashMap<String, Vec<(ScopedIp, std::time::Instant)>> = HashMap::new();
 

@@ -6,7 +6,7 @@
 //! daemon can start and stop on demand instead of running for a fixed
 //! duration from a CLI `main`.
 //!
-//! The Cast Streaming (low-latency, RTP-based) path — see `dlna_mirror.rs`
+//! The Cast Streaming (low-latency, RTP-based) path: see `dlna_mirror.rs`
 //! for the DLNA/UPnP counterpart (HLS-over-HTTP, polled instead of pushed).
 
 use std::sync::Arc;

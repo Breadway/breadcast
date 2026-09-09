@@ -1,5 +1,5 @@
 name = "breadcast"
-description = "Cast your screen to any Chromecast/Google TV or DLNA renderer — daemon + GTK4 popup"
+description = "Cast your screen to any Chromecast/Google TV or DLNA renderer: daemon + GTK4 popup"
 binaries = ["breadcast", "breadcastd"]
 # gst-plugins-base: videoconvert/videoscale/videorate/appsink -- the
 # `gstreamer` package is only the core library. gst-plugin-va: the

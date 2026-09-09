@@ -1,5 +1,5 @@
 //! Prints DLNA/UPnP media renderers as they appear/disappear on the LAN
-//! (via periodic SSDP search for `AVTransport` services — the class of
+//! (via periodic SSDP search for `AVTransport` services, the class of
 //! device Windows' own "Cast to Device", Win+K, targets). Run with:
 //! cargo run -p breadcast-core --example dlna_discover
 

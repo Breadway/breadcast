@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 /// Number of worker threads pulling requests off the server's shared queue.
 /// tiny_http's `Server::recv()` takes `&self` specifically so it can be
 /// called from multiple threads concurrently (its own docs' recommended
-/// pattern) — bounding this at a small fixed number, instead of spawning a
+/// pattern); bounding this at a small fixed number, instead of spawning a
 /// fresh OS thread per request, keeps the request volume any single LAN
 /// host can inflict on this process capped, since this server ends up
 /// reachable by every device on the LAN, not just the Cast receiver it's
@@ -21,7 +21,7 @@ const WORKER_THREADS: usize = 8;
 /// not keep the last screen-recording segments reachable on the LAN.
 ///
 /// Every servable path is namespaced under a random token
-/// (`/<token>/playlist.m3u8`, etc. — see [`HttpServer::token`]) rather than
+/// (`/<token>/playlist.m3u8`, etc.; see [`HttpServer::token`]) rather than
 /// served at the root. There's no way to add an `Authorization` header a
 /// Cast receiver will send back, so this is the standard mitigation for a
 /// server that must stay unauthenticated but shouldn't let every other
@@ -30,9 +30,9 @@ const WORKER_THREADS: usize = 8;
 ///
 /// Sets `Content-Type` per Google's Cast media docs (the receiver's HTTP
 /// client needs a correct type to load segments reliably), `Cache-Control`
-/// (critical for `playlist.m3u8`, which is rewritten every segment — a
+/// (critical for `playlist.m3u8`, which is rewritten every segment: a
 /// cached stale copy stalls playback with no error anywhere), Range/206
-/// support, and a permissive CORS header — get this right from the start
+/// support, and a permissive CORS header; get this right from the start
 /// since a Chromecast has no devtools console to debug a silent load
 /// failure against.
 pub struct HttpServer {
@@ -43,9 +43,9 @@ pub struct HttpServer {
 
 impl HttpServer {
     /// Binds on `bind_addr` (use `0.0.0.0:0` to let the OS pick a free
-    /// port — read the actual port back via [`HttpServer::addr`]) and
+    /// port; read the actual port back via [`HttpServer::addr`]) and
     /// starts serving `root` in the background. Build URLs to hand to a
-    /// Cast device with [`HttpServer::url`], not by hand — it includes the
+    /// Cast device with [`HttpServer::url`], not by hand: it includes the
     /// required path token.
     pub fn start(bind_addr: &str, root: PathBuf) -> Result<Self> {
         let root = root
@@ -93,14 +93,14 @@ impl HttpServer {
 
     /// The bound address, e.g. `0.0.0.0:41823`. Combine with this
     /// machine's LAN IP (not `0.0.0.0` itself) to build the URL handed to
-    /// the Cast device — `0.0.0.0` only means anything to sockets on this
+    /// the Cast device: `0.0.0.0` only means anything to sockets on this
     /// host.
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
     /// Builds a full URL for `relative` (e.g. `"playlist.m3u8"`), rooted at
-    /// `host` (this machine's LAN-reachable IP — see [`HttpServer::addr`]'s
+    /// `host` (this machine's LAN-reachable IP; see [`HttpServer::addr`]'s
     /// doc for why that can't just be `self.addr()`), including the
     /// unguessable path token every request must carry.
     pub fn url(&self, host: std::net::IpAddr, relative: &str) -> String {
@@ -120,7 +120,7 @@ impl Drop for HttpServer {
 
 /// Generates a 32-hex-character unguessable token from `/dev/urandom`. This
 /// is a Linux-only project already (PipeWire, Hyprland's portal, VA-API) so
-/// reaching for the platform's random device directly is fine — no `rand`
+/// reaching for the platform's random device directly is fine: no `rand`
 /// crate dependency for one call site.
 fn random_token() -> String {
     let mut bytes = [0u8; 16];
@@ -200,7 +200,7 @@ fn handle_request(request: tiny_http::Request, root: &Path, token: &str) -> Resu
         .unwrap_or_else(|| "?".to_string());
 
     // Reject anything not under the unguessable token prefix before even
-    // touching the filesystem — see the struct docs for why this exists.
+    // touching the filesystem; see the struct docs for why this exists.
     let Some(relative) = url_path
         .trim_start_matches('/')
         .strip_prefix(token)
@@ -210,12 +210,12 @@ fn handle_request(request: tiny_http::Request, root: &Path, token: &str) -> Resu
         return respond_status(request, 404);
     };
 
-    // Reject any path that could escape `root` (e.g. `../../etc/passwd`) —
+    // Reject any path that could escape `root` (e.g. `../../etc/passwd`):
     // the URL is attacker-controlled input the moment this server is
     // reachable from the LAN, which it is by design (the Cast device is a
     // different host). `root` itself is canonicalized once in `start()`, so
     // this comparison is meaningful even if `root` was originally relative
-    // or contained a symlinked component — comparing a canonical path
+    // or contained a symlinked component: comparing a canonical path
     // against a non-canonical one would make `starts_with` spuriously fail
     // and 404 every request.
     let requested = root.join(relative);
@@ -232,7 +232,7 @@ fn handle_request(request: tiny_http::Request, root: &Path, token: &str) -> Resu
         Ok(data) => data,
         Err(_) => {
             // hlssink3 rotates out old segments (`max-files`) concurrently
-            // with requests for them — a file that existed at
+            // with requests for them; a file that existed at
             // canonicalize() above but is gone by the time it's read is
             // routine for a live stream, not a server fault. Answer with a
             // normal 404 (a receiver skips it and asks for the next
@@ -249,7 +249,7 @@ fn handle_request(request: tiny_http::Request, root: &Path, token: &str) -> Resu
         Some("ts") => "video/mp2t",
         _ => "application/octet-stream",
     };
-    // The playlist is rewritten in place on every segment — must never be
+    // The playlist is rewritten in place on every segment: must never be
     // cached, or a receiver/intermediary replaying a stale copy stalls
     // playback with no error anywhere. Segments are written once under a
     // unique numbered filename and never modified after that, so they're

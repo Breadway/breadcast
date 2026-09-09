@@ -10,7 +10,7 @@ use super::{AV_TRANSPORT, MEDIA_RENDERER};
 
 /// How often to re-issue an SSDP search burst. Unlike mDNS (continuous
 /// multicast browsing via `mdns-sd` in [`crate::discovery`]), SSDP has no
-/// "subscribe and get pushed updates" primitive exposed by `rupnp` —
+/// "subscribe and get pushed updates" primitive exposed by `rupnp`:
 /// discovery here is "ask, wait [`SEARCH_TIMEOUT`], collect whoever
 /// answered," repeated on this interval, rather than event-driven.
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -23,7 +23,7 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A device not reconfirmed within this many consecutive polls is reported
 /// lost. More than one (rather than declaring it gone after a single missed
-/// poll) tolerates an occasional dropped UDP response — SSDP runs over
+/// poll) tolerates an occasional dropped UDP response: SSDP runs over
 /// unreliable multicast, so one missed reply is routine, not a signal the
 /// device actually left the network.
 const MISSED_POLLS_BEFORE_LOST: u32 = 2;
@@ -39,12 +39,12 @@ pub enum DlnaDiscoveryEvent {
 }
 
 /// Periodically searches for UPnP `AVTransport` services (i.e. media
-/// renderers — smart TVs, DLNA-capable receivers, and what Windows' own
+/// renderers: smart TVs, DLNA-capable receivers, and what Windows' own
 /// "Cast to Device" targets) on the LAN via SSDP, and forwards found/lost
 /// devices over a channel.
 ///
 /// Runs as a background `tokio` task rather than the dedicated OS thread
-/// [`crate::discovery::Discovery`] needs — `mdns-sd`'s browse channel is a
+/// [`crate::discovery::Discovery`] needs: `mdns-sd`'s browse channel is a
 /// blocking `flume` receiver with no async-friendly interface, but `rupnp`
 /// and `ssdp-client` are natively `tokio`-async, so a plain spawned task is
 /// both sufficient and more idiomatic here. Dropping the returned

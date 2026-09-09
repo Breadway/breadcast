@@ -1,6 +1,6 @@
 //! A thin, synchronous client for breadcastd's IPC socket (see
 //! `breadcast_core::ipc` for the wire types and
-//! `breadcastd/src/ipc.rs` for the server side). No async runtime here —
+//! `breadcastd/src/ipc.rs` for the server side). No async runtime here:
 //! GTK4 already has its own main loop (glib), so this uses a plain
 //! blocking reader thread feeding an `mpsc::Receiver` the GTK side polls
 //! via `glib::timeout_add_local` (see `main.rs`), rather than pulling in
@@ -22,13 +22,13 @@ pub struct IpcClient {
 impl IpcClient {
     /// Connects to breadcastd's socket and starts a background thread
     /// forwarding every parsed `ServerMessage` (both responses and pushed
-    /// events — the caller distinguishes them, see `ServerMessage`'s
+    /// events; the caller distinguishes them, see `ServerMessage`'s
     /// variants) to the returned receiver, until the connection closes
     /// (breadcastd not running, or it exited).
     pub fn connect() -> Result<(Self, mpsc::Receiver<ServerMessage>)> {
         let path = socket_path()?;
         let write_half = UnixStream::connect(&path)
-            .with_context(|| format!("failed to connect to breadcastd at {} — is it running?", path.display()))?;
+            .with_context(|| format!("failed to connect to breadcastd at {}, is it running?", path.display()))?;
         // A wedged daemon must not freeze the GTK main thread on write.
         let _ = write_half.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         let read_half = write_half.try_clone().context("failed to duplicate the IPC socket handle")?;
@@ -57,7 +57,7 @@ impl IpcClient {
 
     /// Sends a request and returns its id (so the caller can match it
     /// against the `ServerMessage::Response` that arrives later on the
-    /// receiver from [`Self::connect`] — this method doesn't itself wait
+    /// receiver from [`Self::connect`]: this method doesn't itself wait
     /// for a reply, matching the GTK main loop's non-blocking event style).
     pub fn send(&mut self, method: &str, params: serde_json::Value) -> Result<u64> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);

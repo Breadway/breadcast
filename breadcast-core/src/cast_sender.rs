@@ -22,7 +22,7 @@ enum Command {
         reply: mpsc::Sender<Result<Status>>,
     },
     /// Sends a message on an arbitrary namespace to the launched app's
-    /// transport id — used for the Cast Streaming OFFER/ANSWER exchange
+    /// transport id: used for the Cast Streaming OFFER/ANSWER exchange
     /// (see [`crate::caststream`]), which the built-in `media`/`receiver`
     /// channels have no support for. Routed through this session's io
     /// thread rather than sent directly, for the same reason `Load`/`Stop`
@@ -39,7 +39,7 @@ enum Command {
 }
 
 /// An unsolicited message received on a namespace none of `rust_cast`'s
-/// built-in channels claim (`ChannelMessage::Raw`) — e.g. an ANSWER on Cast
+/// built-in channels claim (`ChannelMessage::Raw`), e.g. an ANSWER on Cast
 /// Streaming's `urn:x-cast:com.google.cast.webrtc` namespace. Binary
 /// payloads are dropped (Cast Streaming's control messages are always JSON
 /// text; nothing in this project's protocol usage sends binary here).
@@ -53,7 +53,7 @@ pub struct RawMessage {
 /// [`CastSession::connect`]'s default app (the Default Media Receiver)
 /// never sends, but a custom-app session started via
 /// [`CastSession::connect_app`] (e.g. the Cast Streaming Mirroring receiver)
-/// does. Draining this is required for such sessions to make any progress —
+/// does. Draining this is required for such sessions to make any progress;
 /// see `cast_stream_test.rs`.
 pub struct RawMessages {
     rx: mpsc::Receiver<RawMessage>,
@@ -69,13 +69,13 @@ impl RawMessages {
 /// launched, ready to load media.
 ///
 /// All device I/O happens on a single dedicated thread spawned by
-/// [`CastSession::connect`] — `rust_cast`'s `MessageManager` has no way to
+/// [`CastSession::connect`]: `rust_cast`'s `MessageManager` has no way to
 /// demultiplex responses by request id across threads. `load()`/`stop()`
 /// each do their own blocking read internally (`receive_find_map`); if a
 /// *different* thread were concurrently blocked in `device.receive()` (e.g.
 /// pumping heartbeats/media status, as a previous version of this struct
 /// did), whichever thread's read happens to be in flight when a response
-/// arrives "wins" it — the other blocks forever waiting for a response that
+/// arrives "wins" it; the other blocks forever waiting for a response that
 /// was already consumed and handled elsewhere. Routing every command and
 /// every unsolicited message through one thread's loop avoids that race
 /// entirely. `CastSession` is `Clone` (cheap: just clones a channel sender)
@@ -84,14 +84,14 @@ impl RawMessages {
 #[derive(Clone)]
 pub struct CastSession {
     command_tx: mpsc::Sender<Command>,
-    /// The launched app's transport id — also its CASTV2 destination id on
+    /// The launched app's transport id: also its CASTV2 destination id on
     /// namespaces outside the built-in channels (see
     /// [`Self::send_raw_message`]/[`crate::caststream`]).
     transport_id: String,
 }
 
 /// The stream of unsolicited `MediaResponse` messages (player-state
-/// transitions, load failures, etc.) pushed by the device — separate from
+/// transitions, load failures, etc.) pushed by the device; separate from
 /// [`CastSession`] so a caller can hold one "watch what's happening" handle
 /// alongside any number of cheap [`CastSession`] clones used to issue
 /// commands, without either needing exclusive access.
@@ -119,13 +119,13 @@ impl MediaEvents {
 impl CastSession {
     /// Connects to `target`, launches the Default Media Receiver, and spawns
     /// the session's io thread (which immediately starts servicing
-    /// heartbeats on its own — a caller no longer needs to run anything just
+    /// heartbeats on its own: a caller no longer needs to run anything just
     /// to keep the connection alive). Returns a `CastSession` for issuing
     /// commands plus a `MediaEvents` for observing player state.
     ///
     /// Uses `connect_without_host_verification`: Cast receivers present a
     /// self-signed certificate by design (every Cast sender, including
-    /// Google's own, connects this way) — this is not a shortcut to harden
+    /// Google's own, connects this way); this is not a shortcut to harden
     /// later, verifying against a CA chain will simply never succeed here.
     pub fn connect(target: &CastDevice) -> Result<(Self, MediaEvents)> {
         let (session, media, _raw) = Self::connect_app(target, CastDeviceApp::DefaultMediaReceiver)?;
@@ -136,7 +136,7 @@ impl CastSession {
     /// [`crate::caststream::MIRRORING_APP_ID`] via
     /// `CastDeviceApp::Custom(MIRRORING_APP_ID.to_string())`) and also
     /// returns a [`RawMessages`] stream for namespaces the built-in channels
-    /// don't claim — required for anything beyond the Default Media
+    /// don't claim: required for anything beyond the Default Media
     /// Receiver's `media`/`receiver` namespaces, e.g. Cast Streaming's
     /// OFFER/ANSWER exchange.
     pub fn connect_app(target: &CastDevice, app: CastDeviceApp) -> Result<(Self, MediaEvents, RawMessages)> {
@@ -179,7 +179,7 @@ impl CastSession {
         ))
     }
 
-    /// The launched app's transport id — the CASTV2 destination id to use
+    /// The launched app's transport id: the CASTV2 destination id to use
     /// with [`Self::send_raw_message`] and, equivalently, as the
     /// `receiver_id` a [`crate::caststream::CastStreamSender`] targets.
     pub fn transport_id(&self) -> &str {
@@ -188,7 +188,7 @@ impl CastSession {
 
     /// Sends `message` on `namespace` to the launched app's transport id.
     /// Blocks until the session's io thread has handed it off to
-    /// `rust_cast` (not until any reply — Cast Streaming's ANSWER, for
+    /// `rust_cast` (not until any reply: Cast Streaming's ANSWER, for
     /// example, arrives later as a [`RawMessage`] on the [`RawMessages`]
     /// stream, not as this call's return value).
     pub fn send_raw_message(&self, namespace: &str, message: &str) -> Result<()> {
@@ -226,7 +226,7 @@ impl CastSession {
 
     /// Stops the receiver app and disconnects, ending the session (and its
     /// io thread) cleanly. Without this, the TV is left showing a frozen
-    /// last frame indefinitely after the sender process exits — there is no
+    /// last frame indefinitely after the sender process exits; there is no
     /// `Drop` impl doing this automatically because it needs a round trip
     /// with the device that can fail, and silently swallowing that on drop
     /// would hide exactly the kind of failure this project has already lost
@@ -234,7 +234,7 @@ impl CastSession {
     pub fn stop(&self) -> Result<()> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if self.command_tx.send(Command::Stop { reply: reply_tx }).is_err() {
-            return Ok(()); // io thread already ended — nothing left to stop
+            return Ok(()); // io thread already ended, nothing left to stop
         }
         reply_rx
             .recv()
@@ -244,14 +244,14 @@ impl CastSession {
 
 /// Owns the device connection for the session's lifetime, on its own
 /// thread. Interleaves servicing queued commands (each a blocking
-/// request/response round trip via `rust_cast`'s internals — safe here
+/// request/response round trip via `rust_cast`'s internals: safe here
 /// since this is the only thread ever calling into `device`) with draining
 /// unsolicited messages (heartbeat ping -> pong, media status -> forwarded
 /// to `media_tx`).
 ///
 /// Commands are only picked up between `device.receive()` calls, so
 /// worst-case latency to service one is bounded by how often the device
-/// pushes a message — in practice the receiver's own heartbeat ping (every
+/// pushes a message; in practice the receiver's own heartbeat ping (every
 /// few seconds), not "forever": `rust_cast` gives no way to set a read
 /// timeout on the underlying stream to poll more eagerly than that.
 fn run_io_loop(
@@ -294,14 +294,14 @@ fn run_io_loop(
                     .context("failed to stop the receiver app");
                 let _ = device.connection.disconnect(transport_id.as_str());
                 let _ = reply.send(result);
-                return; // session over — end the io thread
+                return; // session over, end the io thread
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => return, // every CastSession clone dropped
         }
 
         match device.receive() {
-            // Only pong an actual PING — matching every `Heartbeat(_)`
+            // Only pong an actual PING: matching every `Heartbeat(_)`
             // variant (as a previous version did) would also fire on PONGs,
             // which is harmless only by accident today since nothing here
             // sends its own PING yet.
@@ -312,7 +312,7 @@ fn run_io_loop(
             }
             Ok(ChannelMessage::Heartbeat(_)) => {}
             Ok(ChannelMessage::Media(media_response)) => {
-                let _ = media_tx.send(media_response); // no listener is fine — nobody's watching
+                let _ = media_tx.send(media_response); // no listener is fine, nobody's watching
             }
             Ok(ChannelMessage::Raw(msg)) => {
                 if let CastMessagePayload::String(message) = msg.payload {
@@ -322,7 +322,7 @@ fn run_io_loop(
                         message,
                     });
                 }
-                // Binary payloads are silently dropped — see `RawMessage`'s
+                // Binary payloads are silently dropped: see `RawMessage`'s
                 // doc comment for why that's fine for this project's usage.
             }
             Ok(_) => {}

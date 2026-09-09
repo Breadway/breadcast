@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     pipeline.set_state(gst::State::Playing)?;
     println!("Pipeline playing, writing HLS to {}", output_dir.display());
 
-    // Watch the encode pipeline's own bus in the background — without
+    // Watch the encode pipeline's own bus in the background: without
     // this, a vah264enc/hlssink3 error partway through mirroring is
     // invisible (nothing else polls this pipeline's bus), and the failure
     // would only ever show up indirectly as the Cast session stalling.
@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     let status = session.load(&stream_url, "application/vnd.apple.mpegurl", stream_type)?;
     println!("Receiver acknowledged the load: {status:#?}");
 
-    println!("Mirroring for up to 60s — check the TV. Watching player state live:");
+    println!("Mirroring for up to 60s; check the TV. Watching player state live:");
     let pump = std::thread::spawn(move || {
         media_events.pump_with_media_callback(|media| match media {
             MediaResponse::Status(status) => {
@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         elapsed += Duration::from_secs(1);
     }
     if pump.is_finished() {
-        println!("Cast session ended early (after {elapsed:?}) — connection likely dropped or the receiver stopped playback.");
+        println!("Cast session ended early (after {elapsed:?}): connection likely dropped or the receiver stopped playback.");
     }
 
     if let Err(e) = session.stop() {

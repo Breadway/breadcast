@@ -7,11 +7,11 @@ use ashpd::desktop::Session;
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 
 /// Where the portal's restore token is cached, so re-mirroring doesn't
-/// require re-clicking the system picker every single time — the token
+/// require re-clicking the system picker every single time: the token
 /// (opaque to us) is what lets a later `SelectSources` call skip straight
 /// to "yes, the same source as last time" instead of prompting again.
 ///
-/// Filters out an *empty* `XDG_CACHE_HOME` in addition to an unset one —
+/// Filters out an *empty* `XDG_CACHE_HOME` in addition to an unset one:
 /// some environments export it but leave it blank, which would otherwise
 /// resolve to a relative path against the current working directory.
 fn restore_token_path() -> PathBuf {
@@ -36,8 +36,8 @@ pub struct CaptureSession {
 
 impl CaptureSession {
     /// Opens the portal's screen-cast picker (monitor/window selection is
-    /// the portal's own native UI — see `xdg-desktop-portal-hyprland`'s own
-    /// picker dialog — not anything breadcast draws itself) and returns a
+    /// the portal's own native UI, see `xdg-desktop-portal-hyprland`'s own
+    /// picker dialog, not anything breadcast draws itself) and returns a
     /// session bound to whatever the user picked.
     ///
     /// `CursorMode::Embedded` bakes the cursor into the captured frames,
@@ -54,7 +54,7 @@ impl CaptureSession {
             .context("failed to create a portal screencast session")?;
 
         // Everything past this point can fail (denied/cancelled picker, no
-        // streams, etc.) — ashpd's `Session` has no `Drop` impl, so on any
+        // streams, etc.): ashpd's `Session` has no `Drop` impl, so on any
         // of those paths the session would otherwise leak for the rest of
         // this process's life (and in a long-running daemon, potentially a
         // leaked PipeWire node per cancelled picker). Route every error
@@ -97,12 +97,12 @@ impl CaptureSession {
 
         // Persist whatever token came back so the *next* start() can skip
         // the picker. A stale/invalid token is not a failure mode to guard
-        // against here — the portal falls back to prompting again on its
+        // against here: the portal falls back to prompting again on its
         // own if the token no longer resolves to a valid grant.
         //
         // The token is a no-prompt capability to re-open a screen capture
         // of this user's session, so it's written 0600 in a 0700 directory
-        // rather than relying on umask — any other local user being able to
+        // rather than relying on umask: any other local user being able to
         // read it would let them silently re-grant themselves the same
         // capture access.
         if let Some(token) = response.restore_token() {
@@ -132,7 +132,7 @@ impl CaptureSession {
         Ok(stream.pipe_wire_node_id())
     }
 
-    /// The PipeWire node id for the selected video source — this is what
+    /// The PipeWire node id for the selected video source: this is what
     /// gets passed to GStreamer's `pipewiresrc path=<id>`.
     pub fn video_node_id(&self) -> u32 {
         self.video_node_id

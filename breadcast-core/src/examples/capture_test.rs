@@ -1,7 +1,7 @@
 //! Phase 2 step 1: opens the portal's screen-cast picker and prints the
 //! PipeWire node id it hands back. Run with:
 //! cargo run -p breadcast-core --example capture_test
-//! A system picker dialog should appear — pick a monitor or window.
+//! A system picker dialog should appear: pick a monitor or window.
 
 use breadcast_core::CaptureSession;
 

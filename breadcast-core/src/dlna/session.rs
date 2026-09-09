@@ -12,8 +12,8 @@ use super::AV_TRANSPORT;
 /// connection or background thread to manage here: every UPnP action is an
 /// independent SOAP-over-HTTP request, so `DlnaSession` is just a cheap,
 /// `Clone`-able handle to the renderer's resolved control endpoint.
-/// Concurrent `load()`/`stop()` calls are naturally safe — each is its own
-/// HTTP request — with none of the single-socket message-demultiplexing
+/// Concurrent `load()`/`stop()` calls are naturally safe: each is its own
+/// HTTP request, with none of the single-socket message-demultiplexing
 /// hazard `CastSession` has to run an actor thread to avoid for CASTV2.
 #[derive(Clone)]
 pub struct DlnaSession {
@@ -24,7 +24,7 @@ pub struct DlnaSession {
 impl DlnaSession {
     /// Fetches `device`'s full description and resolves its `AVTransport`
     /// service. Fails if the device no longer answers, or turns out not to
-    /// expose `AVTransport` after all — shouldn't happen given discovery
+    /// expose `AVTransport` after all; shouldn't happen given discovery
     /// already searched for exactly that service, but a device's
     /// description can in principle change between being found and being
     /// connected to.
@@ -50,7 +50,7 @@ impl DlnaSession {
     /// starts playback.
     ///
     /// `content_url` is XML-escaped before being embedded in the SOAP
-    /// request body — in breadcast's own usage it's always a URL this
+    /// request body: in breadcast's own usage it's always a URL this
     /// process generated itself (safe by construction), but nothing about
     /// this function's signature guarantees that stays true for every
     /// caller, and an unescaped `&` alone would produce malformed XML the
@@ -106,7 +106,7 @@ impl DlnaSession {
     }
 
     /// Stops playback. Unlike `CastSession::stop`, there's no persistent
-    /// session or launched app to tear down — this is just the `Stop`
+    /// session or launched app to tear down: this is just the `Stop`
     /// action.
     pub async fn stop(&self) -> Result<()> {
         self.service
@@ -120,7 +120,7 @@ impl DlnaSession {
     /// `CurrentTransportState` (e.g. `"PLAYING"`, `"TRANSITIONING"`,
     /// `"STOPPED"`, `"NO_MEDIA_PRESENT"`).
     ///
-    /// This is a request/response poll, not a push subscription —
+    /// This is a request/response poll, not a push subscription:
     /// `AVTransport` does support UPnP eventing (`Service::subscribe` in
     /// `rupnp`) for state pushed as it changes, but that needs a locally
     /// bound HTTP callback listener, which is more machinery than a status

@@ -4,8 +4,8 @@
 //! cargo run -p breadcast-core --example dlna_mirror_test [name substring]
 //! Matches any renderer found if no argument is given.
 //!
-//! This proves the same milestone `mirror_test` proved for Cast — a real
-//! receiver actually playing this pipeline's live HLS output — but for a
+//! This proves the same milestone `mirror_test` proved for Cast: a real
+//! receiver actually playing this pipeline's live HLS output, but for a
 //! different, unproven protocol path. DLNA renderer support for a
 //! *live-growing* (never-ending) HLS playlist is much less consistent
 //! across devices than Chromecast's: DLNA's classic use case is "play this
@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     pipeline.set_state(gst::State::Playing)?;
     println!("Pipeline playing, writing HLS to {}", output_dir.display());
 
-    // Watch the encode pipeline's own bus in the background — see
+    // Watch the encode pipeline's own bus in the background: see
     // mirror_test.rs's identical block for why this matters.
     {
         let pipeline_watch = pipeline.clone();
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     session.load(&stream_url).await?;
     println!("Renderer accepted the load.");
 
-    println!("Mirroring for up to 60s — check the display. Polling transport state:");
+    println!("Mirroring for up to 60s; check the display. Polling transport state:");
     let mirror_duration = Duration::from_secs(60);
     let mut elapsed = Duration::ZERO;
     while elapsed < mirror_duration {

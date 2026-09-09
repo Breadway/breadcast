@@ -8,10 +8,10 @@ use breadcast_core::{CastSession, Discovery, DiscoveryEvent};
 use rust_cast::channels::media::{MediaResponse, StreamType};
 
 // Google's old gtv-videos-bucket sample assets (from the classic Cast SDK
-// docs) now 403 — confirmed dead via `curl -I`, not a Cast-side issue. The
+// docs) now 403; confirmed dead via `curl -I`, not a Cast-side issue. The
 // 21MB samplelib.com/mp4/sample-30s.mp4 loaded but then the receiver killed
 // the sender connection ("failed to fill whole buffer" / EOF) on both real
-// devices tested — consistent with a non-"fast-start" MP4 (moov atom at the
+// devices tested: consistent with a non-"fast-start" MP4 (moov atom at the
 // end) stalling the receiver's simple HTML5 video player. This one is small
 // (788KB/10s) and known-good.
 const SAMPLE_VIDEO: &str = "https://www.w3schools.com/html/mov_bbb.mp4";
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     println!(
-        "Found {} ({}) at {}:{} — connecting...",
+        "Found {} ({}) at {}:{}, connecting...",
         device.name, device.model, device.host, device.port
     );
 

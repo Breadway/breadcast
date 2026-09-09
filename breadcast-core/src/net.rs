@@ -6,18 +6,18 @@ const EXCLUDED_PREFIXES: &[&str] = &["tailscale", "wg", "docker", "veth", "br-",
 
 /// Finds this machine's LAN-reachable IPv4 address by enumerating network
 /// interfaces directly, rather than the more common "UDP-connect to a
-/// public address and read back the local endpoint" trick — that trick
+/// public address and read back the local endpoint" trick: that trick
 /// asks the kernel's *default route*, which Tailscale can silently take
 /// over via policy routing (confirmed on a real machine: with Tailscale
 /// active, `ip route get 8.8.8.8` resolves via `tailscale0`, not the real
 /// LAN interface). Using it handed a Cast device a 100.64.0.0/10 Tailscale
 /// CGNAT address it could never reach, which surfaced only as an
-/// unexplained `LOAD FAILED` — exactly the class of silent failure this
+/// unexplained `LOAD FAILED`, exactly the class of silent failure this
 /// project has already spent a lot of time chasing. Explicitly excluding
 /// VPN/virtual interface name prefixes sidesteps the whole problem
 /// regardless of what the default route happens to be.
 ///
-/// Shared by every casting protocol (Cast, DLNA, ...) — they all need to
+/// Shared by every casting protocol (Cast, DLNA, ...): they all need to
 /// embed this machine's own address in a URL handed to a receiver device.
 pub fn local_lan_ip() -> Result<IpAddr> {
     pick_lan_ip(None)
@@ -25,7 +25,7 @@ pub fn local_lan_ip() -> Result<IpAddr> {
 
 /// Like [`local_lan_ip`], but prefers the interface whose subnet contains
 /// `peer`. Dual-homed machines (ethernet + wifi, two VLANs) otherwise
-/// embed the wrong host in the HLS URL and the renderer cannot fetch it —
+/// embed the wrong host in the HLS URL and the renderer cannot fetch it;
 /// the same silent `LOAD FAILED` class as the Tailscale case above.
 pub fn local_lan_ip_for(peer: IpAddr) -> Result<IpAddr> {
     pick_lan_ip(Some(peer))
@@ -52,7 +52,7 @@ fn pick_lan_ip(peer: Option<IpAddr>) -> Result<IpAddr> {
         .into_iter()
         .map(|(_, addr, _)| IpAddr::V4(addr))
         .next()
-        .context("no LAN-reachable IPv4 address found (excluding loopback/VPN/virtual interfaces) — is this machine connected to a network?")
+        .context("no LAN-reachable IPv4 address found (excluding loopback/VPN/virtual interfaces): is this machine connected to a network?")
 }
 
 /// Enumerates this machine's private, LAN-reachable IPv4 addresses as
