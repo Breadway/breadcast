@@ -72,6 +72,26 @@ cargo build --release --workspace
 cargo test --release --workspace
 ```
 
+Cargo.toml pins every `git.breadway.dev` dependency (bread-theme,
+bread-utils) to a release tag; the commands above build against exactly
+those tagged versions, same as a stable/beta release would. To instead
+build against those dependencies' own `main` (what `dev-release.yml` and
+`check.yml` do, and what you need to exercise a cross-repo change before
+either side is tagged), run bread-ecosystem's shared script from this
+checkout:
+
+```sh
+/path/to/bread-ecosystem/scripts/dev-deps.sh --root .
+cargo build --release --workspace   # no --locked: the patched deps resolve to main
+```
+
+This clones each dependency repo's `main` as a true sibling of this
+checkout (or wherever `DEV_DEPS_DIR` points, if set), writes a generated,
+gitignored `.cargo/config.toml`, and updates `Cargo.lock` to match. Discard
+both (`git checkout -- Cargo.lock` and remove `.cargo/config.toml`) when
+you're done. See bread-ecosystem's `docs/release-channels.md`
+("Cross-repo dependency resolution") for the full model.
+
 ## CI
 
 Intended single-trunk wiring (see
@@ -81,13 +101,26 @@ Intended single-trunk wiring (see
 - `vX.Y.Z-rc.N` tag → beta-track build
 - `vX.Y.Z` tag → signed stable release
 
-`release.yml` already fires on a `v*` tag push. `dev-release.yml` and
-`beta-release.yml` are leftover from the old three-branch model and still
-trigger on the `dev` / `beta` branch names; they have not been rewritten.
-Follow the cycle above; do not treat those branches as current, and do not
-rewrite the leftover workflows unless you are deliberately migrating CI.
+`release.yml` already fires on a `v*` tag push. `beta-release.yml` is
+leftover from the old three-branch model and still triggers on the `beta`
+branch name; it has not been rewritten. Don't treat that branch as
+current, and don't rewrite that leftover workflow unless you are
+deliberately migrating CI.
 
-`check.yml` runs clippy + test on `feature/**` and `fix/**` branches.
+`dev-release.yml` triggers on push to `main` (the `dev` branch trigger is
+kept only so an old push there still works until that branch is deleted).
+As of ECO-38, it's dev mode: clones bread-ecosystem's main, lints
+git.breadway.dev dependency pins is done in `check.yml`, and
+`scripts/dev-deps.sh` resolves bread-theme/bread-utils to their own
+`main` before building without `--locked`. This also fixed the dev index
+regeneration step, which was still cloning bread-ecosystem's `dev` branch
+(removed in bread-ecosystem's single-trunk migration; that step had been
+failing outright on every dev-release run) to `main`.
+
+`check.yml` runs on push to `main`/`feature/**`/`fix/**`: lints
+git.breadway.dev dependency pins, then builds/clippies/tests in the same
+dev mode as `dev-release.yml`, so a PR that needs a just-merged,
+not-yet-tagged dependency change still passes.
 
 All CI runs on a self-hosted runner.
 
