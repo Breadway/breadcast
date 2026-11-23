@@ -1,4 +1,4 @@
-# breadcast: bread event integration
+# cast: bread event integration
 
 breadcast is a standalone screen-mirroring app: it works exactly the same
 with or without `breadd` running. When breadd *is* present, `breadcastd`
