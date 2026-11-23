@@ -1,4 +1,4 @@
-# breadcast: bread event integration
+# cast: bread event integration
 
 breadcast is a standalone screen-mirroring app: it works exactly the same
 with or without `breadd` running. When breadd *is* present, `breadcastd`
@@ -23,15 +23,20 @@ discovery-driven emit half.
 
 ## Commands honored (`bread.command.cast.*`)
 
-| Command | Data | Effect |
-|---------|------|--------|
-| `bread.command.cast.start` | `{ "device_id": "<id>" }` | Starts mirroring to the given device (looked up across both the Cast and DLNA device lists, same `device_id` a `list_devices`/`device_list_changed` payload reports). Fire-and-forget: the outcome shows up as `bread.cast.mirroring_started`/`.failed`, not a reply to this command. No-ops (logged) if already casting. |
-| `bread.command.cast.stop` | none | Stops the active mirroring session, if any. No-ops if already idle. |
+| Verb | Data | Effect |
+|------|------|--------|
+| `start` | `{ "device_id": "<id>" }` | Starts mirroring to the given device (looked up across both the Cast and DLNA device lists, same `device_id` a `list_devices`/`device_list_changed` payload reports). Fire-and-forget: the outcome shows up as `bread.cast.mirroring_started`/`.failed`, not a reply to this command. No-ops (logged) if already casting. |
+| `stop` | none | Stops the active mirroring session, if any. No-ops if already idle. |
 
 Both commands are handled identically regardless of whether the session was
 started from here, the `breadcast` GTK popup, or the IPC socket directly;
 `breadcastd`'s daemon actor has exactly one notion of "the active session"
 (see `breadcastd/src/daemon.rs`), not one per control surface.
+
+## Not implemented
+
+- No deferred command verb or event is documented in this build. Device listing, discovery toggles, and renderer-specific controls remain IPC or in-app surfaces, not bread commands.
+- No event reports per-frame mirroring health, stream resolution, or audio state; only session start, stop, failure, and device discovery are published.
 
 ## Fail-safe behavior
 
